@@ -1,9 +1,7 @@
 {
-  "z1_min": 86,
-  "z2_min": 104,
-  "z3_min": 121,
-  "z4_min": 138,
-  "z5_min": 156,
+  "moderate_min": 112,
+  "vigorous_min": 131,
+  "max_effort_min": 166,
   "age": 47,
   "hr_max": 173
 }

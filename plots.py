@@ -11,16 +11,16 @@ from analysis import ZoneConfig, DEFAULT_ZONES
 
 # Zone color palette (bottom → top in stacked bar)
 ZONE_COLORS = {
-    "resting": "#d5d8dc",  # light grey  – below Zone 1
-    "zone1":   "#aab7b8",  # grey        – light activity
-    "zone2":   "#27ae60",  # green       – aerobic / fat-burn
-    "zone3":   "#e67e22",  # orange      – tempo
-    "zone4":   "#e74c3c",  # red         – threshold
-    "zone5":   "#8e44ad",  # purple      – max effort
+    "light":      "#d5d8dc",  # light grey  – below Moderate
+    "moderate":   "#27ae60",  # green       – aerobic / fat-burn
+    "vigorous":   "#e67e22",  # orange      – vigorous effort
+    "max_effort": "#e74c3c",  # red         – max effort
 }
 FIT_COLOR = "#2980b9"     # blue – fit-mins bars
+GOAL_COLOR = "#8e44ad"    # purple – weekly goal line
 
-ZONE_STACK_KEYS = ("resting", "zone1", "zone2", "zone3", "zone4", "zone5")
+ZONE_STACK_KEYS = ("light", "moderate", "vigorous", "max_effort")
+WEEKLY_GOAL = 150
 
 
 def _stacked_bar(ax, x, data_by_key, keys, colors, labels, width=0.7):
@@ -33,11 +33,17 @@ def _stacked_bar(ax, x, data_by_key, keys, colors, labels, width=0.7):
         bottom += values
 
 
-def _fit_bar(ax, x, data_by_key, width=0.7):
-    """Draw fit-mins bars + trend line."""
+def _fit_bar(ax, x, data_by_key, show_goal: bool = False, width=0.7):
+    """Draw fit-mins bars + trend line, and optionally a weekly goal line."""
     values = np.array([data_by_key[k].get("fit_mins", 0) for k in data_by_key])
     ax.bar(x, values, width, color=FIT_COLOR, alpha=0.80, label="Fit-Mins")
     ax.plot(x, values, "o-", color="#1a5276", linewidth=2, markersize=5, zorder=5)
+    for xi, v in zip(x, values):
+        if v > 0:
+            ax.text(xi, v + 1, str(int(v)), ha="center", va="bottom", fontsize=8, fontweight="bold")
+    if show_goal:
+        ax.axhline(WEEKLY_GOAL, color=GOAL_COLOR, linewidth=1.5, linestyle="--",
+                   label=f"Goal ({WEEKLY_GOAL} Fit-Mins)")
     return values
 
 
@@ -80,7 +86,7 @@ def plot_daily(
 
     _fit_bar(ax_fit, x, {d: daily[d] for d in dates})
     _configure_axes(ax_fit, x, x_labels, "Fit-Mins",
-                    "Daily Fit-Mins  (Zone2 + 2 × Zone3–5 minutes)")
+                    "Daily Fit-Mins  (Moderate + 2 × Vigorous + Max Effort)")
 
     plt.tight_layout()
     fig.savefig(save_path, dpi=150, bbox_inches="tight")
@@ -109,9 +115,10 @@ def plot_weekly(
                  ZONE_STACK_KEYS, ZONE_COLORS, labels)
     _configure_axes(ax_zones, x, weeks, "Minutes", "Weekly Minutes in Each Zone", rotate=30)
 
-    _fit_bar(ax_fit, x, {w: weekly[w] for w in weeks})
+    _fit_bar(ax_fit, x, {w: weekly[w] for w in weeks}, show_goal=True)
     _configure_axes(ax_fit, x, weeks, "Fit-Mins",
-                    "Weekly Fit-Mins  (Zone2 + 2 × Zone3–5 minutes)", rotate=30)
+                    f"Weekly Fit-Mins  (goal: {WEEKLY_GOAL})  —  Moderate + 2 × Vigorous + Max Effort",
+                    rotate=30)
 
     plt.tight_layout()
     fig.savefig(save_path, dpi=150, bbox_inches="tight")
@@ -142,7 +149,7 @@ def plot_monthly(
 
     _fit_bar(ax_fit, x, {m: monthly[m] for m in months})
     _configure_axes(ax_fit, x, months, "Fit-Mins",
-                    "Monthly Fit-Mins  (Zone2 + 2 × Zone3–5 minutes)", rotate=30)
+                    "Monthly Fit-Mins  —  Moderate + 2 × Vigorous + Max Effort", rotate=30)
 
     plt.tight_layout()
     fig.savefig(save_path, dpi=150, bbox_inches="tight")

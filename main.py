@@ -48,9 +48,9 @@ load_dotenv()
 # ---------------------------------------------------------------------------
 
 def run_configure() -> ZoneConfig:
-    """Interactive wizard: age → HR-Max → zone boundaries with optional override."""
-    print("\nFitbit HR Zone Configuration")
-    print("=" * 44)
+    """Interactive wizard: age → HR-Max → ACSM zone boundaries with optional override."""
+    print("\nFitbit HR Zone Configuration  (ACSM intensity framework)")
+    print("=" * 56)
 
     age_str = input("Enter your age: ").strip()
     try:
@@ -62,18 +62,15 @@ def run_configure() -> ZoneConfig:
     hr_max = 220 - age
     print(f"\nHR-Max = 220 − {age} = {hr_max} bpm")
 
-    z1_min = round(hr_max * 0.50)
-    z2_min = round(hr_max * 0.60)
-    z3_min = round(hr_max * 0.70)
-    z4_min = round(hr_max * 0.80)
-    z5_min = round(hr_max * 0.90)
+    moderate_min   = round(hr_max * 0.65)
+    vigorous_min   = round(hr_max * 0.76)
+    max_effort_min = round(hr_max * 0.96)
 
-    print("\nCalculated zone lower bounds:")
-    print(f"  Zone 1 : {z1_min} bpm  (50 % of HR-Max)")
-    print(f"  Zone 2 : {z2_min} bpm  (60 %)")
-    print(f"  Zone 3 : {z3_min} bpm  (70 %)")
-    print(f"  Zone 4 : {z4_min} bpm  (80 %)")
-    print(f"  Zone 5 : {z5_min} bpm  (90 %)")
+    print("\nCalculated zone lower bounds (ACSM):")
+    print(f"  Light      : < {moderate_min} bpm   (< 65% of HR-Max)")
+    print(f"  Moderate   : {moderate_min} bpm      (65–75%)")
+    print(f"  Vigorous   : {vigorous_min} bpm      (76–96%)")
+    print(f"  Max Effort : {max_effort_min} bpm     (> 96%)")
 
     override = input("\nOverride any boundary? [y/N]: ").strip().lower()
     if override == "y":
@@ -87,25 +84,22 @@ def run_configure() -> ZoneConfig:
                 print(f"  Invalid — keeping {current}")
                 return current
 
-        z1_min = _ask("Zone 1 lower bound (50%)", z1_min)
-        z2_min = _ask("Zone 2 lower bound (60%)", z2_min)
-        z3_min = _ask("Zone 3 lower bound (70%)", z3_min)
-        z4_min = _ask("Zone 4 lower bound (80%)", z4_min)
-        z5_min = _ask("Zone 5 lower bound (90%)", z5_min)
+        moderate_min   = _ask("Moderate lower bound (65%)", moderate_min)
+        vigorous_min   = _ask("Vigorous lower bound (76%)", vigorous_min)
+        max_effort_min = _ask("Max Effort lower bound (96%)", max_effort_min)
 
     cfg = ZoneConfig(
-        z1_min=z1_min, z2_min=z2_min, z3_min=z3_min,
-        z4_min=z4_min, z5_min=z5_min,
+        moderate_min=moderate_min,
+        vigorous_min=vigorous_min,
+        max_effort_min=max_effort_min,
     )
     save_config(cfg, age=age, hr_max=hr_max)
 
     print(f"\nConfiguration saved to {CONFIG_FILE}")
-    print(f"  Resting : < {cfg.z1_min} bpm")
-    print(f"  Zone 1  : {cfg.z1_min} – {cfg.z2_min - 1} bpm  (50–60%)")
-    print(f"  Zone 2  : {cfg.z2_min} – {cfg.z3_min - 1} bpm  (60–70%)")
-    print(f"  Zone 3  : {cfg.z3_min} – {cfg.z4_min - 1} bpm  (70–80%)")
-    print(f"  Zone 4  : {cfg.z4_min} – {cfg.z5_min - 1} bpm  (80–90%)")
-    print(f"  Zone 5  : {cfg.z5_min}+ bpm              (90–100%)")
+    print(f"  Light      : < {cfg.moderate_min} bpm              (< 65%)")
+    print(f"  Moderate   : {cfg.moderate_min} – {cfg.vigorous_min - 1} bpm  (65–75%)")
+    print(f"  Vigorous   : {cfg.vigorous_min} – {cfg.max_effort_min - 1} bpm  (76–96%)")
+    print(f"  Max Effort : {cfg.max_effort_min}+ bpm              (> 96%)")
     return cfg
 
 
@@ -154,21 +148,19 @@ def build_parser() -> argparse.ArgumentParser:
 # ---------------------------------------------------------------------------
 
 def _print_table(title: str, data: dict[str, dict], key_header: str):
-    print(f"\n{'='*76}")
+    print(f"\n{'='*72}")
     print(f"  {title}")
-    print(f"{'='*76}")
-    print(f"  {key_header:<14}  {'Rest':>5}  {'Z1':>5}  {'Z2':>5}  {'Z3':>5}  {'Z4':>5}  {'Z5':>5}  {'Fit-Mins':>8}")
-    print("  " + "-" * 72)
+    print(f"{'='*72}")
+    print(f"  {key_header:<14}  {'Light':>6}  {'Moderate':>8}  {'Vigorous':>8}  {'Max Eff':>7}  {'Fit-Mins':>8}")
+    print("  " + "-" * 68)
     for key in sorted(data.keys()):
         s = data[key]
         print(
             f"  {key:<14}  "
-            f"{s['resting']:>5}  "
-            f"{s['zone1']:>5}  "
-            f"{s['zone2']:>5}  "
-            f"{s['zone3']:>5}  "
-            f"{s['zone4']:>5}  "
-            f"{s['zone5']:>5}  "
+            f"{s['light']:>6}  "
+            f"{s['moderate']:>8}  "
+            f"{s['vigorous']:>8}  "
+            f"{s['max_effort']:>7}  "
             f"{s['fit_mins']:>8}"
         )
 
@@ -221,15 +213,13 @@ def main():
         print("Error: start date must be before end date.")
         sys.exit(1)
 
-    print(f"\nFitbit Heart Rate Zone Analyzer")
-    print(f"  Date range : {start}  →  {end}  ({(end - start).days + 1} days)")
-    print(f"  Resting    : < {cfg.z1_min} bpm")
-    print(f"  Zone 1     : {cfg.z1_min} – {cfg.z2_min - 1} bpm  (50–60%)")
-    print(f"  Zone 2     : {cfg.z2_min} – {cfg.z3_min - 1} bpm  (60–70%)")
-    print(f"  Zone 3     : {cfg.z3_min} – {cfg.z4_min - 1} bpm  (70–80%)")
-    print(f"  Zone 4     : {cfg.z4_min} – {cfg.z5_min - 1} bpm  (80–90%)")
-    print(f"  Zone 5     : {cfg.z5_min}+ bpm              (90–100%)")
-    print(f"  Fit-Mins   : Z2 + 2×(Z3+Z4+Z5)")
+    print(f"\nFitbit Heart Rate Zone Analyzer  (ACSM intensity framework)")
+    print(f"  Date range  : {start}  →  {end}  ({(end - start).days + 1} days)")
+    print(f"  Light       : < {cfg.moderate_min} bpm              (< 65%)")
+    print(f"  Moderate    : {cfg.moderate_min} – {cfg.vigorous_min - 1} bpm  (65–75%)")
+    print(f"  Vigorous    : {cfg.vigorous_min} – {cfg.max_effort_min - 1} bpm  (76–96%)")
+    print(f"  Max Effort  : {cfg.max_effort_min}+ bpm              (> 96%)")
+    print(f"  Fit-Mins    : Moderate + 2×(Vigorous + Max Effort)  [goal: 150/week]")
     print()
 
     # Fetch (uses .cache/ by default — already-downloaded days are not re-fetched)

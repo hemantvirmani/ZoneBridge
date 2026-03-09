@@ -1,17 +1,16 @@
 """
-Heart-rate zone classification and metrics.
+Heart-rate zone classification and metrics (ACSM intensity framework).
 
 Zone boundaries are loaded from fitbit_config.json (created via --configure).
-Five zones based on HR-Max percentages, plus a resting bucket for < Zone 1.
+Four zones based on HR-Max percentages:
 
-  Resting  –  hr < z1_min          (below 50 % HR-Max)
-  Zone 1   –  z1_min <= hr < z2_min  (50–60 %)
-  Zone 2   –  z2_min <= hr < z3_min  (60–70 %)
-  Zone 3   –  z3_min <= hr < z4_min  (70–80 %)
-  Zone 4   –  z4_min <= hr < z5_min  (80–90 %)
-  Zone 5   –  hr >= z5_min           (90–100 %)
+  Light      –  hr < moderate_min       (< 65 % HR-Max)
+  Moderate   –  moderate_min <= hr < vigorous_min  (65–75 %)
+  Vigorous   –  vigorous_min <= hr < max_effort_min  (76–96 %)
+  Max Effort –  hr >= max_effort_min    (> 96 % HR-Max)
 
-Fit-Mins = Zone2_mins + 2 × (Zone3_mins + Zone4_mins + Zone5_mins)
+Fit-Mins = Moderate_mins + 2 × (Vigorous_mins + Max_Effort_mins)
+Weekly goal: 150 Fit-Mins
 """
 from __future__ import annotations
 
@@ -24,7 +23,7 @@ from typing import Sequence
 CONFIG_FILE = Path("fitbit_config.json")
 
 # Ordered bucket names used throughout the pipeline
-ZONE_KEYS = ("resting", "zone1", "zone2", "zone3", "zone4", "zone5")
+ZONE_KEYS = ("light", "moderate", "vigorous", "max_effort")
 
 
 # ---------------------------------------------------------------------------
@@ -33,21 +32,17 @@ ZONE_KEYS = ("resting", "zone1", "zone2", "zone3", "zone4", "zone5")
 
 @dataclass
 class ZoneConfig:
-    z1_min: int = 90    # Zone 1 lower bound (≈50 % of HR-Max 180), inclusive
-    z2_min: int = 108   # Zone 2 lower bound (≈60 %), inclusive
-    z3_min: int = 126   # Zone 3 lower bound (≈70 %), inclusive
-    z4_min: int = 144   # Zone 4 lower bound (≈80 %), inclusive
-    z5_min: int = 162   # Zone 5 lower bound (≈90 %), inclusive
+    moderate_min: int = 117   # 65% of HR-Max 180 (default age 40)
+    vigorous_min: int = 137   # 76% of HR-Max 180
+    max_effort_min: int = 173  # 96% of HR-Max 180
 
     @property
     def labels(self) -> dict[str, str]:
         return {
-            "resting": f"Resting (<{self.z1_min} bpm)",
-            "zone1":   f"Zone 1 ({self.z1_min}–{self.z2_min - 1} bpm, 50–60%)",
-            "zone2":   f"Zone 2 ({self.z2_min}–{self.z3_min - 1} bpm, 60–70%)",
-            "zone3":   f"Zone 3 ({self.z3_min}–{self.z4_min - 1} bpm, 70–80%)",
-            "zone4":   f"Zone 4 ({self.z4_min}–{self.z5_min - 1} bpm, 80–90%)",
-            "zone5":   f"Zone 5 ({self.z5_min}+ bpm, 90–100%)",
+            "light":      f"Light (<{self.moderate_min} bpm, <65%)",
+            "moderate":   f"Moderate ({self.moderate_min}–{self.vigorous_min - 1} bpm, 65–75%)",
+            "vigorous":   f"Vigorous ({self.vigorous_min}–{self.max_effort_min - 1} bpm, 76–96%)",
+            "max_effort": f"Max Effort ({self.max_effort_min}+ bpm, >96%)",
         }
 
 
@@ -60,11 +55,9 @@ def load_config() -> ZoneConfig:
     if CONFIG_FILE.exists():
         data = json.loads(CONFIG_FILE.read_text())
         return ZoneConfig(
-            z1_min=data.get("z1_min", 90),
-            z2_min=data.get("z2_min", 108),
-            z3_min=data.get("z3_min", 126),
-            z4_min=data.get("z4_min", 144),
-            z5_min=data.get("z5_min", 162),
+            moderate_min=data.get("moderate_min", 117),
+            vigorous_min=data.get("vigorous_min", 137),
+            max_effort_min=data.get("max_effort_min", 173),
         )
     return ZoneConfig()
 
@@ -76,11 +69,9 @@ def save_config(
 ) -> None:
     """Persist zone config (and optional metadata) to fitbit_config.json."""
     data: dict = {
-        "z1_min": cfg.z1_min,
-        "z2_min": cfg.z2_min,
-        "z3_min": cfg.z3_min,
-        "z4_min": cfg.z4_min,
-        "z5_min": cfg.z5_min,
+        "moderate_min": cfg.moderate_min,
+        "vigorous_min": cfg.vigorous_min,
+        "max_effort_min": cfg.max_effort_min,
     }
     if age is not None:
         data["age"] = age
@@ -97,18 +88,14 @@ DEFAULT_ZONES = ZoneConfig()
 # ---------------------------------------------------------------------------
 
 def classify_bpm(bpm: int, cfg: ZoneConfig = DEFAULT_ZONES) -> str:
-    """Return 'resting' or 'zone1'…'zone5' for a heart-rate value."""
-    if bpm < cfg.z1_min:
-        return "resting"
-    if bpm < cfg.z2_min:
-        return "zone1"
-    if bpm < cfg.z3_min:
-        return "zone2"
-    if bpm < cfg.z4_min:
-        return "zone3"
-    if bpm < cfg.z5_min:
-        return "zone4"
-    return "zone5"
+    """Return 'light', 'moderate', 'vigorous', or 'max_effort' for a heart-rate value."""
+    if bpm < cfg.moderate_min:
+        return "light"
+    if bpm < cfg.vigorous_min:
+        return "moderate"
+    if bpm < cfg.max_effort_min:
+        return "vigorous"
+    return "max_effort"
 
 
 # ---------------------------------------------------------------------------
@@ -127,8 +114,8 @@ def zone_minutes(dataset: Sequence[dict], cfg: ZoneConfig = DEFAULT_ZONES) -> di
 
 
 def fit_mins(zm: dict[str, int]) -> int:
-    """Fit-Mins = Zone2 + 2 × (Zone3 + Zone4 + Zone5)."""
-    return zm["zone2"] + 2 * (zm["zone3"] + zm["zone4"] + zm["zone5"])
+    """Fit-Mins = Moderate + 2 × (Vigorous + Max_Effort)."""
+    return zm["moderate"] + 2 * (zm["vigorous"] + zm["max_effort"])
 
 
 # ---------------------------------------------------------------------------
@@ -141,7 +128,7 @@ def daily_summary(
 ) -> dict[str, dict]:
     """
     Build per-day stats from raw intraday data.
-    Returns {date_str: {'resting': m, 'zone1': m, …, 'zone5': m, 'fit_mins': m}}
+    Returns {date_str: {'light': m, 'moderate': m, 'vigorous': m, 'max_effort': m, 'fit_mins': m}}
     """
     result: dict[str, dict] = {}
     for date_str, dataset in hr_by_date.items():
