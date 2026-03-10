@@ -1,21 +1,35 @@
 # Fitbit Heart Rate Zone Analyzer
 
-Fetches your Fitbit intraday heart rate data and breaks it down into five training zones based on your personal HR-Max. Produces both tabular summaries and stacked bar charts for daily, weekly, and monthly views.
+Fetches your Fitbit intraday heart rate data and classifies every minute into ACSM exercise intensity zones based on your personal HR-Max. Produces tabular summaries and stacked bar charts for daily, weekly, and monthly views — so you can track whether you're hitting the recommended 150 Fit-Mins per week.
 
 ---
 
-## What it tracks
+## Purpose
 
-| Bucket   | % of HR-Max | Description            |
-|----------|-------------|------------------------|
-| Resting  | < 50%       | Below training zones   |
-| Zone 1   | 50 – 60%    | Light / warm-up        |
-| Zone 2   | 60 – 70%    | Aerobic / fat-burn     |
-| Zone 3   | 70 – 80%    | Tempo / aerobic power  |
-| Zone 4   | 80 – 90%    | Threshold              |
-| Zone 5   | 90 – 100%   | Max effort / anaerobic |
+Most fitness trackers show raw heart rate or generic zones that don't map to any scientific standard. This tool applies the **ACSM (American College of Sports Medicine)** intensity framework — the same evidence-based guidelines used by exercise physiologists — to your actual Fitbit intraday data (1-minute resolution).
 
-**Fit-Mins** = Zone 2 mins + 2 × (Zone 3 + Zone 4 + Zone 5 mins)
+The key metric is **Fit-Mins**: a weighted count of exercise minutes that mirrors the CDC/ACSM physical activity guidelines:
+
+- 1 minute of Moderate intensity = **1 Fit-Min**
+- 1 minute of Vigorous or Max Effort = **2 Fit-Mins**
+- 1 minute of Light activity = **0 Fit-Mins**
+
+**Weekly goal: 150 Fit-Mins** (equivalent to 150 min moderate *or* 75 min vigorous, or any combination).
+
+---
+
+## Intensity Zones (ACSM)
+
+| Zone | % of HR-Max | Fit-Mins/min | Description |
+|------|-------------|--------------|-------------|
+| Light | < 65% | 0 | Below training threshold |
+| Moderate | 65 – 75% | 1 | Aerobic / fat-burn |
+| Vigorous | 76 – 96% | 2 | Cardio / tempo |
+| Max Effort | > 96% | 2 | Anaerobic / peak |
+
+Zone boundaries are calculated from your HR-Max (220 − age) and saved to `fitbit_config.json`.
+
+**Fit-Mins formula:** `Moderate + 2 × (Vigorous + Max_Effort)`
 
 ---
 
@@ -24,7 +38,7 @@ Fetches your Fitbit intraday heart rate data and breaks it down into five traini
 - Python 3.10+
 - A Fitbit account with a **Personal** app registered at [dev.fitbit.com](https://dev.fitbit.com/apps/new)
   - App type: **Server** (enables client secret + intraday access without special approval)
-  - Redirect URI: `http://localhost:8080` (or an HTTPS local IP — see [Authentication](#authentication))
+  - Redirect URI: `http://localhost:8080` (or an HTTPS local IP — see [Authentication](#first-time-setup))
   - Scopes: `heartrate activity profile`
 
 ---
@@ -66,21 +80,20 @@ FITBIT_REDIRECT_URI=http://localhost:8080
 python main.py --configure
 ```
 
-Enter your age and the tool calculates HR-Max (220 − age) and sets zone boundaries automatically. You can accept the calculated values or override any boundary manually. Settings are saved to `fitbit_config.json`.
+Enter your age and the tool calculates HR-Max (220 − age) and sets ACSM zone boundaries automatically. You can accept the calculated values or override any boundary manually. Settings are saved to `fitbit_config.json`.
 
 ```
-Fitbit HR Zone Configuration
-============================================
-Enter your age: 38
+Fitbit HR Zone Configuration  (ACSM intensity framework)
+========================================================
+Enter your age: 47
 
-HR-Max = 220 − 38 = 182 bpm
+HR-Max = 220 − 47 = 173 bpm
 
-Calculated zone lower bounds:
-  Zone 1 : 91 bpm  (50 % of HR-Max)
-  Zone 2 : 109 bpm  (60 %)
-  Zone 3 : 127 bpm  (70 %)
-  Zone 4 : 146 bpm  (80 %)
-  Zone 5 : 164 bpm  (90 %)
+Calculated zone lower bounds (ACSM):
+  Light      : < 112 bpm   (< 65% of HR-Max)
+  Moderate   : 112 bpm      (65–75%)
+  Vigorous   : 131 bpm      (76–96%)
+  Max Effort : 166 bpm      (> 96%)
 
 Override any boundary? [y/N]:
 ```
@@ -104,7 +117,7 @@ This opens your browser, walks through the Fitbit OAuth flow, and saves tokens t
 python main.py
 
 # Custom date range
-python main.py --start 2025-01-01 --end 2025-03-31
+python main.py --start 2025-11-28 --end 2026-03-07
 
 # Last 30 days, all three views
 python main.py --days 30 --view daily,weekly,monthly
@@ -114,6 +127,9 @@ python main.py --no-plot
 
 # Skip cache and re-fetch everything from the API
 python main.py --no-cache
+
+# Re-run on already-downloaded data (no API calls)
+python main.py --start 2025-11-28 --end 2026-03-07 --view daily,weekly,monthly
 ```
 
 ### All options
@@ -138,18 +154,18 @@ Each run prints a summary table and (unless `--no-plot`) saves PNG charts to the
 
 **Table example:**
 ```
-============================================================================
+========================================================================
   DAILY SUMMARY
-============================================================================
-  Date             Rest    Z1     Z2     Z3     Z4     Z5   Fit-Mins
-  ------------------------------------------------------------------------
-  2025-03-10        892   312     98     67     42     29        334
-  2025-03-11       1021   198     74     55     18      4        206
+========================================================================
+  Date             Light  Moderate  Vigorous  Max Eff  Fit-Mins
+  --------------------------------------------------------------------
+  2025-03-10         892        98        67       29       323
+  2025-03-11        1021        74        55        4       192
 ```
 
-**Charts:** two-panel figures with a stacked zone bar on top and a Fit-Mins trend bar on the bottom, saved as:
+**Charts:** two-panel figures for each view — stacked zone bar on top, Fit-Mins bar (with per-bar value labels and weekly goal line) on the bottom — saved as:
 - `fitbit_daily.png`
-- `fitbit_weekly.png`
+- `fitbit_weekly.png` — includes a 150 Fit-Mins goal line
 - `fitbit_monthly.png`
 
 ---
