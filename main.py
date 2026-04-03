@@ -23,9 +23,9 @@ from analysis import (
     save_config,
     weekly_summary,
 )
-from fitbit import FitbitClient
+from fitbit_client import FitbitClient
 from plots import plot_daily, plot_monthly, plot_weekly
-from strava import StravaClient
+from strava_client import StravaClient
 from sync_adapter import activity_to_strava_payload, normalize_type_list
 
 load_dotenv()

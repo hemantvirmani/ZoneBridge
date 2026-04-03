@@ -274,9 +274,9 @@ Distance is converted to meters from km/mi/m/yd when possible.
 ```text
 FitbitApp/
   main.py          # CLI and mode routing
-  fitbit.py        # Fitbit client
+  fitbit_client.py # Fitbit client
   auth.py          # Fitbit OAuth helpers
-  strava.py        # Strava OAuth + upload client
+  strava_client.py # Strava OAuth + upload client
   sync_adapter.py  # Fitbit->Strava mapping and payload conversion
   analysis.py      # Zone/Fit-Mins calculations
   plots.py         # chart generation
