@@ -3,7 +3,7 @@ requires = ["setuptools>=69", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "fitbitapp"
+name = "zonebridge"
 version = "0.1.0"
 description = "CLI for Fitbit HR analysis and Fitbit to Strava sync."
 readme = "README.md"
@@ -17,7 +17,7 @@ dependencies = [
 ]
 
 [project.scripts]
-fitbitapp = "main:main"
+zonebridge = "main:main"
 
 [tool.setuptools]
 py-modules = [

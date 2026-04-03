@@ -92,7 +92,7 @@ def run_configure() -> ZoneConfig:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="fitbitapp",
+        prog="zonebridge",
         description="Fitbit HR analysis and Fitbit -> Strava sync",
     )
 

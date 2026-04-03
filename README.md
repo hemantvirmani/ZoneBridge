@@ -1,6 +1,6 @@
-# FitbitApp
+# zonebridge
 
-FitbitApp is a command-line tool to:
+zonebridge is a command-line tool to:
 - analyze Fitbit intraday heart-rate data using ACSM intensity zones
 - compute Fit-Mins summaries (daily, weekly, monthly)
 - optionally sync Fitbit activities to Strava
@@ -9,7 +9,7 @@ FitbitApp is a command-line tool to:
 
 ```bash
 git clone <repo-url>
-cd FitbitApp
+cd zonebridge
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
@@ -46,10 +46,10 @@ If Strava asks for callback details, use:
 The CLI is mode-based:
 
 ```bash
-fitbitapp --mode <configure|auth|analyze|sync> [options]
+zonebridge --mode <configure|auth|analyze|sync> [options]
 ```
 
-If you do not have a `fitbitapp` launcher yet, run the same command with `python main.py`.
+If you do not have a `zonebridge` launcher yet, run the same command with `python main.py`.
 
 Example:
 
@@ -57,18 +57,41 @@ Example:
 python main.py --mode analyze --days 7
 ```
 
-## Run From GitHub With `uvx` (No Install)
+## Install `uv` (Needed For `uvx`)
 
-You can run FitbitApp directly from this repo without installing it permanently:
+`uvx` comes with `uv`. Install `uv` first:
+
+Windows (PowerShell):
+
+```powershell
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+```
+
+macOS / Linux:
 
 ```bash
-uvx --from git+https://github.com/hemantvirmani/FitbitApp fitbitapp --help
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+Verify installation:
+
+```bash
+uv --version
+uvx --help
+```
+
+## Run From GitHub With `uvx` (No Install)
+
+You can run zonebridge directly from this repo without installing it permanently:
+
+```bash
+uvx --from git+https://github.com/hemantvirmani/zonebridge zonebridge --help
 ```
 
 For reproducible runs, pin to a tag:
 
 ```bash
-uvx --from git+https://github.com/hemantvirmani/FitbitApp@v0.1.0 fitbitapp --mode analyze --days 7
+uvx --from git+https://github.com/hemantvirmani/zonebridge@v0.1.0 zonebridge --mode analyze --days 7
 ```
 
 ## Modes
@@ -85,7 +108,7 @@ uvx --from git+https://github.com/hemantvirmani/FitbitApp@v0.1.0 fitbitapp --mod
 ### Configure
 
 ```bash
-fitbitapp --mode configure
+zonebridge --mode configure
 ```
 
 Allowed options:
@@ -96,13 +119,13 @@ Allowed options:
 Fitbit auth:
 
 ```bash
-fitbitapp --mode auth --provider fitbit [--client-id ID]
+zonebridge --mode auth --provider fitbit [--client-id ID]
 ```
 
 Strava auth:
 
 ```bash
-fitbitapp --mode auth --provider strava [--strava-client-id ID] [--strava-client-secret SECRET]
+zonebridge --mode auth --provider strava [--strava-client-id ID] [--strava-client-secret SECRET]
 ```
 
 Allowed options:
@@ -116,7 +139,7 @@ Allowed options:
 ### Analyze
 
 ```bash
-fitbitapp --mode analyze [date options] [output options]
+zonebridge --mode analyze [date options] [output options]
 ```
 
 Date options (choose one style):
@@ -134,7 +157,7 @@ Output options:
 ### Sync
 
 ```bash
-fitbitapp --mode sync --provider strava [date options] [sync options]
+zonebridge --mode sync --provider strava [date options] [sync options]
 ```
 
 Date options (choose one style):
@@ -181,78 +204,78 @@ Auth mode only performs OAuth token flows. It does not download analysis/activit
 
 ```bash
 # configure HR zones interactively
-fitbitapp --mode configure
+zonebridge --mode configure
 
 # auth Fitbit using env vars
-fitbitapp --mode auth --provider fitbit
+zonebridge --mode auth --provider fitbit
 
 # auth Fitbit with explicit client id override
-fitbitapp --mode auth --provider fitbit --client-id 23ABCX
+zonebridge --mode auth --provider fitbit --client-id 23ABCX
 
 # auth Strava using env vars
-fitbitapp --mode auth --provider strava
+zonebridge --mode auth --provider strava
 
 # auth Strava with explicit credentials
-fitbitapp --mode auth --provider strava --strava-client-id 12345 --strava-client-secret secret123
+zonebridge --mode auth --provider strava --strava-client-id 12345 --strava-client-secret secret123
 ```
 
 ### Analyze Examples
 
 ```bash
 # default window (last 7 days), default views (daily,weekly)
-fitbitapp --mode analyze
+zonebridge --mode analyze
 
 # explicit 14-day analysis
-fitbitapp --mode analyze --days 14
+zonebridge --mode analyze --days 14
 
 # custom date range
-fitbitapp --mode analyze --start 2026-01-01 --end 2026-01-31
+zonebridge --mode analyze --start 2026-01-01 --end 2026-01-31
 
 # monthly only
-fitbitapp --mode analyze --days 90 --view monthly
+zonebridge --mode analyze --days 90 --view monthly
 
 # daily + weekly + monthly
-fitbitapp --mode analyze --days 45 --view daily,weekly,monthly
+zonebridge --mode analyze --days 45 --view daily,weekly,monthly
 
 # table output only (skip PNG plots)
-fitbitapp --mode analyze --days 30 --no-plot
+zonebridge --mode analyze --days 30 --no-plot
 
 # force fresh Fitbit API fetch
-fitbitapp --mode analyze --days 7 --no-cache
+zonebridge --mode analyze --days 7 --no-cache
 
 # fail instead of prompting for missing creds
-fitbitapp --mode analyze --days 7 --non-interactive
+zonebridge --mode analyze --days 7 --non-interactive
 ```
 
 ### Sync Examples
 
 ```bash
 # sync last 7 days
-fitbitapp --mode sync --provider strava --days 7
+zonebridge --mode sync --provider strava --days 7
 
 # sync custom date range
-fitbitapp --mode sync --provider strava --start 2026-02-01 --end 2026-02-07
+zonebridge --mode sync --provider strava --start 2026-02-01 --end 2026-02-07
 
 # dry run (no upload)
-fitbitapp --mode sync --provider strava --days 14 --dry-run
+zonebridge --mode sync --provider strava --days 14 --dry-run
 
 # only upload Run and Walk
-fitbitapp --mode sync --provider strava --days 30 --types Run,Walk
+zonebridge --mode sync --provider strava --days 30 --types Run,Walk
 
 # exclude Yoga and Walk
-fitbitapp --mode sync --provider strava --days 30 --exclude-types Yoga,Walk
+zonebridge --mode sync --provider strava --days 30 --exclude-types Yoga,Walk
 
 # upload at most 10 activities
-fitbitapp --mode sync --provider strava --days 30 --limit 10
+zonebridge --mode sync --provider strava --days 30 --limit 10
 
 # re-upload even if already in local synced log
-fitbitapp --mode sync --provider strava --days 30 --force
+zonebridge --mode sync --provider strava --days 30 --force
 
 # force fresh activity fetch and verbose logging
-fitbitapp --mode sync --provider strava --days 7 --no-cache --verbose
+zonebridge --mode sync --provider strava --days 7 --no-cache --verbose
 
 # full explicit credentials in one command
-fitbitapp --mode sync --provider strava --days 7 --client-id FITBIT123 --strava-client-id STRAVA123 --strava-client-secret STRAVASECRET
+zonebridge --mode sync --provider strava --days 7 --client-id FITBIT123 --strava-client-id STRAVA123 --strava-client-secret STRAVASECRET
 ```
 
 ### Same commands with python main.py
@@ -286,7 +309,7 @@ Distance is converted to meters from km/mi/m/yd when possible.
 ## Project Structure
 
 ```text
-FitbitApp/
+zonebridge/
   main.py          # CLI and mode routing
   fitbit_client.py # Fitbit client
   auth.py          # Fitbit OAuth helpers
@@ -304,3 +327,4 @@ FitbitApp/
 - `numpy`
 - `python-dotenv`
 - `cryptography`
+
