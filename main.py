@@ -1,30 +1,10 @@
 """
 Fitbit Heart Rate Zone Analyzer
-================================
-Fetches intraday heart rate data from the Fitbit Web API and produces:
-  • Zone minutes (Resting + Zone1–5) per day / week / month
-  • Fit-Mins metric  =  Zone2 mins + 2 × (Zone3 + Zone4 + Zone5 mins)
-  • Stacked bar charts saved as PNG
 
-Zone boundaries are stored in fitbit_config.json (run --configure to set up).
-
-Usage examples
---------------
-  # First-time zone setup — asks age, calculates HR-Max, sets zone boundaries
-  python main.py --configure
-
-  # First-time Fitbit authentication
-  python main.py --auth
-
-  # Last 7 days (default), daily + weekly plots
-  python main.py
-
-  # Custom date range
-  python main.py --start 2025-01-01 --end 2025-01-31
-
-  # 30 days, weekly + monthly views
-  python main.py --days 30 --view weekly,monthly
+Main CLI entrypoint for configuring zones, authenticating providers,
+analyzing heart-rate zones, and syncing Fitbit activities to Strava.
 """
+
 import argparse
 import json
 import os
@@ -34,48 +14,53 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from api import FitbitClient
 from analysis import (
-    ZoneConfig, load_config, save_config, CONFIG_FILE,
-    daily_summary, weekly_summary, monthly_summary,
+    CONFIG_FILE,
+    ZoneConfig,
+    daily_summary,
+    load_config,
+    monthly_summary,
+    save_config,
+    weekly_summary,
 )
-from plots import plot_daily, plot_weekly, plot_monthly
+from fitbit import FitbitClient
+from plots import plot_daily, plot_monthly, plot_weekly
 from strava import StravaClient
+from sync_adapter import activity_to_strava_payload, normalize_type_list
 
 load_dotenv()
 
+SYNC_LOG = Path(".cache") / "strava_synced.json"
+ALLOWED_VIEWS = {"daily", "weekly", "monthly"}
 
-# ---------------------------------------------------------------------------
-# Zone configuration wizard
-# ---------------------------------------------------------------------------
 
 def run_configure() -> ZoneConfig:
-    """Interactive wizard: age → HR-Max → ACSM zone boundaries with optional override."""
-    print("\nFitbit HR Zone Configuration  (ACSM intensity framework)")
+    """Interactive wizard: age -> HR-Max -> ACSM zone boundaries with optional override."""
+    print("\nFitbit HR Zone Configuration (ACSM intensity framework)")
     print("=" * 56)
 
     age_str = input("Enter your age: ").strip()
     try:
         age = int(age_str)
     except ValueError:
-        print("Error: age must be a whole number.")
-        sys.exit(1)
+        raise ValueError("age must be a whole number")
 
     hr_max = 220 - age
-    print(f"\nHR-Max = 220 − {age} = {hr_max} bpm")
+    print(f"\nHR-Max = 220 - {age} = {hr_max} bpm")
 
-    moderate_min   = round(hr_max * 0.65)
-    vigorous_min   = round(hr_max * 0.76)
+    moderate_min = round(hr_max * 0.65)
+    vigorous_min = round(hr_max * 0.76)
     max_effort_min = round(hr_max * 0.96)
 
     print("\nCalculated zone lower bounds (ACSM):")
     print(f"  Light      : < {moderate_min} bpm   (< 65% of HR-Max)")
-    print(f"  Moderate   : {moderate_min} bpm      (65–75%)")
-    print(f"  Vigorous   : {vigorous_min} bpm      (76–96%)")
+    print(f"  Moderate   : {moderate_min} bpm      (65-75%)")
+    print(f"  Vigorous   : {vigorous_min} bpm      (76-96%)")
     print(f"  Max Effort : {max_effort_min} bpm     (> 96%)")
 
     override = input("\nOverride any boundary? [y/N]: ").strip().lower()
     if override == "y":
+
         def _ask(label: str, current: int) -> int:
             raw = input(f"  {label} [{current}]: ").strip()
             if not raw:
@@ -83,11 +68,11 @@ def run_configure() -> ZoneConfig:
             try:
                 return int(raw)
             except ValueError:
-                print(f"  Invalid — keeping {current}")
+                print(f"  Invalid input, keeping {current}")
                 return current
 
-        moderate_min   = _ask("Moderate lower bound (65%)", moderate_min)
-        vigorous_min   = _ask("Vigorous lower bound (76%)", vigorous_min)
+        moderate_min = _ask("Moderate lower bound (65%)", moderate_min)
+        vigorous_min = _ask("Vigorous lower bound (76%)", vigorous_min)
         max_effort_min = _ask("Max Effort lower bound (96%)", max_effort_min)
 
     cfg = ZoneConfig(
@@ -99,104 +84,266 @@ def run_configure() -> ZoneConfig:
 
     print(f"\nConfiguration saved to {CONFIG_FILE}")
     print(f"  Light      : < {cfg.moderate_min} bpm              (< 65%)")
-    print(f"  Moderate   : {cfg.moderate_min} – {cfg.vigorous_min - 1} bpm  (65–75%)")
-    print(f"  Vigorous   : {cfg.vigorous_min} – {cfg.max_effort_min - 1} bpm  (76–96%)")
+    print(f"  Moderate   : {cfg.moderate_min} - {cfg.vigorous_min - 1} bpm  (65-75%)")
+    print(f"  Vigorous   : {cfg.vigorous_min} - {cfg.max_effort_min - 1} bpm  (76-96%)")
     print(f"  Max Effort : {cfg.max_effort_min}+ bpm              (> 96%)")
     return cfg
 
 
-# ---------------------------------------------------------------------------
-# CLI
-# ---------------------------------------------------------------------------
-
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(
-        prog="fitbit_zones",
-        description="Fitbit Heart Rate Zone Analyzer",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=__doc__,
+    parser = argparse.ArgumentParser(
+        prog="fitbitapp",
+        description="Fitbit HR analysis and Fitbit -> Strava sync",
     )
 
-    # Setup modes
-    p.add_argument("--configure", action="store_true",
-                   help="Set up HR zone boundaries from age/HR-Max and exit")
-    p.add_argument("--auth", action="store_true",
-                   help="(Re-)authenticate with Fitbit and exit")
-    p.add_argument("--client-id", metavar="ID",
-                   help="Fitbit OAuth Client ID (or set FITBIT_CLIENT_ID env var)")
+    parser.add_argument(
+        "--mode",
+        required=True,
+        choices=["configure", "auth", "analyze", "sync"],
+        help="Run mode: configure, auth, analyze, or sync.",
+    )
+    parser.add_argument(
+        "--provider",
+        choices=["fitbit", "strava"],
+        help="Provider for auth/sync modes.",
+    )
 
-    # Strava sync modes
-    p.add_argument("--strava-auth", action="store_true",
-                   help="Authenticate with Strava and exit")
-    p.add_argument("--sync-strava", action="store_true",
-                   help="Sync Fitbit activities to Strava")
-    p.add_argument("--strava-client-id", metavar="ID",
-                   help="Strava Client ID (or set STRAVA_CLIENT_ID env var)")
-    p.add_argument("--strava-client-secret", metavar="SECRET",
-                   help="Strava Client Secret (or set STRAVA_CLIENT_SECRET env var)")
+    parser.add_argument(
+        "--client-id",
+        metavar="ID",
+        help="Fitbit OAuth Client ID (or FITBIT_CLIENT_ID env var).",
+    )
+    parser.add_argument(
+        "--strava-client-id",
+        metavar="ID",
+        help="Strava Client ID (or STRAVA_CLIENT_ID env var).",
+    )
+    parser.add_argument(
+        "--strava-client-secret",
+        metavar="SECRET",
+        help="Strava Client Secret (or STRAVA_CLIENT_SECRET env var).",
+    )
 
-    # Date range
-    grp = p.add_mutually_exclusive_group()
-    grp.add_argument("--days", type=int, default=7, metavar="N",
-                     help="Analyse the last N days (default: 7)")
-    grp.add_argument("--start", metavar="YYYY-MM-DD",
-                     help="Start date (requires --end)")
-    p.add_argument("--end", metavar="YYYY-MM-DD",
-                   help="End date (default: yesterday)")
+    parser.add_argument(
+        "--days",
+        type=int,
+        metavar="N",
+        help="Analyze/sync the last N days.",
+    )
+    parser.add_argument(
+        "--start",
+        metavar="YYYY-MM-DD",
+        help="Start date for analyze/sync.",
+    )
+    parser.add_argument(
+        "--end",
+        metavar="YYYY-MM-DD",
+        help="End date for analyze/sync.",
+    )
 
-    # Output
-    p.add_argument("--view", default="daily,weekly",
-                   help="Comma-separated list of views: daily, weekly, monthly (default: daily,weekly)")
-    p.add_argument("--no-cache", action="store_true",
-                   help="Bypass local cache and always fetch fresh data")
-    p.add_argument("--no-plot", action="store_true",
-                   help="Print tables only, skip plotting")
-    p.add_argument("--types", metavar="LIST",
-                   help="Comma-separated Fitbit activity names to include (e.g. Run,Ride,Walk)")
-    p.add_argument("--exclude-types", metavar="LIST",
-                   help="Comma-separated Fitbit activity names to exclude")
-    p.add_argument("--dry-run", action="store_true",
-                   help="Fetch and convert only, do not upload to Strava")
-    p.add_argument("--limit", type=int, default=0, metavar="N",
-                   help="Max number of activities to upload (0 = no limit)")
-    p.add_argument("--force", action="store_true",
-                   help="Upload even if activity appears already synced")
-    p.add_argument("--verbose", action="store_true",
-                   help="Verbose logging")
+    parser.add_argument(
+        "--view",
+        default="daily,weekly",
+        help="Comma-separated views for analyze mode: daily,weekly,monthly.",
+    )
+    parser.add_argument(
+        "--no-cache",
+        action="store_true",
+        help="Bypass cache and always fetch from APIs.",
+    )
+    parser.add_argument(
+        "--no-plot",
+        action="store_true",
+        help="Analyze mode only: print summaries and skip PNG charts.",
+    )
 
-    return p
+    parser.add_argument(
+        "--types",
+        metavar="LIST",
+        help="Sync mode only: include only these Fitbit activity names.",
+    )
+    parser.add_argument(
+        "--exclude-types",
+        metavar="LIST",
+        help="Sync mode only: exclude these Fitbit activity names.",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Sync mode only: convert only and do not upload to Strava.",
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=0,
+        metavar="N",
+        help="Sync mode only: max number of activities to upload (0 = no limit).",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Sync mode only: upload even if already synced.",
+    )
+
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Enable extra logging.",
+    )
+    parser.add_argument(
+        "--non-interactive",
+        action="store_true",
+        help="Fail instead of prompting for missing credentials.",
+    )
+
+    return parser
 
 
-# ---------------------------------------------------------------------------
-# Pretty-print helpers
-# ---------------------------------------------------------------------------
-
-def _print_table(title: str, data: dict[str, dict], key_header: str):
-    print(f"\n{'='*72}")
-    print(f"  {title}")
-    print(f"{'='*72}")
-    print(f"  {key_header:<14}  {'Light':>6}  {'Moderate':>8}  {'Vigorous':>8}  {'Max Eff':>7}  {'Fit-Mins':>8}")
-    print("  " + "-" * 68)
-    for key in sorted(data.keys()):
-        s = data[key]
-        print(
-            f"  {key:<14}  "
-            f"{s['light']:>6}  "
-            f"{s['moderate']:>8}  "
-            f"{s['vigorous']:>8}  "
-            f"{s['max_effort']:>7}  "
-            f"{s['fit_mins']:>8}"
-        )
+def _collect_provided_flags(argv: list[str]) -> set[str]:
+    flags = set()
+    for token in argv:
+        if token.startswith("--"):
+            flags.add(token.split("=", 1)[0])
+    return flags
 
 
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
+def _validate_mode_contract(args: argparse.Namespace, parser: argparse.ArgumentParser, provided_flags: set[str]) -> None:
+    allowed_by_mode = {
+        "configure": {"--mode", "--verbose", "--non-interactive"},
+        "auth": {
+            "--mode",
+            "--provider",
+            "--client-id",
+            "--strava-client-id",
+            "--strava-client-secret",
+            "--verbose",
+            "--non-interactive",
+        },
+        "analyze": {
+            "--mode",
+            "--client-id",
+            "--days",
+            "--start",
+            "--end",
+            "--view",
+            "--no-cache",
+            "--no-plot",
+            "--verbose",
+            "--non-interactive",
+        },
+        "sync": {
+            "--mode",
+            "--provider",
+            "--client-id",
+            "--strava-client-id",
+            "--strava-client-secret",
+            "--days",
+            "--start",
+            "--end",
+            "--types",
+            "--exclude-types",
+            "--dry-run",
+            "--limit",
+            "--force",
+            "--no-cache",
+            "--verbose",
+            "--non-interactive",
+        },
+    }
 
-SYNC_LOG = Path(".cache") / "strava_synced.json"
+    unsupported = sorted(flag for flag in provided_flags if flag not in allowed_by_mode[args.mode])
+    if unsupported:
+        parser.error(f"Unsupported option(s) for --mode {args.mode}: {', '.join(unsupported)}")
+
+    if args.days is not None and args.days < 1:
+        parser.error("--days must be >= 1")
+
+    if args.limit < 0:
+        parser.error("--limit must be >= 0")
+
+    if args.mode == "configure":
+        if args.non_interactive:
+            parser.error("--mode configure is interactive and cannot be used with --non-interactive")
+        if args.provider:
+            parser.error("--provider is not valid for --mode configure")
+        return
+
+    if args.mode == "auth":
+        if not args.provider:
+            parser.error("--mode auth requires --provider (fitbit|strava)")
+        if args.provider == "fitbit":
+            if "--strava-client-id" in provided_flags or "--strava-client-secret" in provided_flags:
+                parser.error("Strava credentials are not valid with --mode auth --provider fitbit")
+        elif args.provider == "strava":
+            if "--client-id" in provided_flags:
+                parser.error("--client-id is Fitbit-only and not valid with --mode auth --provider strava")
+        return
+
+    if args.mode == "analyze":
+        if args.provider:
+            parser.error("--provider is not valid for --mode analyze")
+        _validate_date_flags(args, parser)
+        try:
+            parse_views(args.view)
+        except ValueError as exc:
+            parser.error(str(exc))
+        return
+
+    if args.mode == "sync":
+        if args.provider != "strava":
+            parser.error("--mode sync requires --provider strava")
+        _validate_date_flags(args, parser)
+        include = normalize_type_list(args.types)
+        exclude = normalize_type_list(args.exclude_types)
+        overlap = sorted(include & exclude)
+        if overlap:
+            parser.error(f"--types and --exclude-types overlap: {', '.join(overlap)}")
 
 
-def _ensure_cache_dir():
+def _validate_date_flags(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None:
+    if args.start and not args.end:
+        parser.error("--start requires --end")
+    if args.end and not args.start:
+        parser.error("--end requires --start")
+    if args.start and args.days is not None:
+        parser.error("Use either --days or --start/--end, not both")
+
+
+def parse_views(raw_view: str) -> list[str]:
+    views = [v.strip().lower() for v in raw_view.split(",") if v.strip()]
+    if not views:
+        raise ValueError("--view cannot be empty")
+    invalid = sorted(set(views) - ALLOWED_VIEWS)
+    if invalid:
+        raise ValueError(f"Invalid --view value(s): {', '.join(invalid)}")
+    return views
+
+
+def _parse_iso_date(value: str, arg_name: str) -> date:
+    try:
+        return datetime.strptime(value, "%Y-%m-%d").date()
+    except ValueError as exc:
+        raise ValueError(f"{arg_name} must be YYYY-MM-DD") from exc
+
+
+def _resolve_date_range(args: argparse.Namespace) -> tuple[date, date]:
+    yesterday = date.today() - timedelta(days=1)
+
+    if args.start:
+        start = _parse_iso_date(args.start, "--start")
+        end = _parse_iso_date(args.end, "--end")
+    else:
+        days = args.days if args.days is not None else 7
+        end = yesterday
+        start = end - timedelta(days=days - 1)
+
+    if start > end:
+        raise ValueError("start date must be before or equal to end date")
+
+    return start, end
+
+
+def _ensure_cache_dir() -> None:
     Path(".cache").mkdir(exist_ok=True)
 
 
@@ -211,276 +358,211 @@ def _save_synced(data: dict[str, dict]) -> None:
     SYNC_LOG.write_text(json.dumps(data, indent=2))
 
 
-def _normalize_type_list(raw: str | None) -> set[str]:
-    if not raw:
-        return set()
-    return {t.strip().lower() for t in raw.split(",") if t.strip()}
+def _require_value(current: str, prompt: str, error_message: str, non_interactive: bool) -> str:
+    value = current.strip() if current else ""
+    if value:
+        return value
+    if non_interactive:
+        raise ValueError(error_message)
+    value = input(prompt).strip()
+    if value:
+        return value
+    raise ValueError(error_message)
 
 
-def _fitbit_to_strava_type(name: str) -> str:
-    n = name.lower()
-    if "run" in n:
-        return "Run"
-    if "walk" in n:
-        return "Walk"
-    if "hike" in n:
-        return "Hike"
-    if "ride" in n or "bike" in n or "cycling" in n:
-        return "Ride"
-    if "swim" in n:
-        return "Swim"
-    if "elliptical" in n:
-        return "Elliptical"
-    if "row" in n:
-        return "Rowing"
-    if "yoga" in n:
-        return "Yoga"
-    if "weight" in n or "strength" in n:
-        return "WeightTraining"
-    if "stair" in n or "stepper" in n:
-        return "StairStepper"
-    return "Workout"
-
-
-def _distance_to_meters(distance: float | int | None, unit: str | None) -> float | None:
-    if distance is None:
-        return None
-    if unit is None:
-        return None
-    u = unit.strip().lower()
-    if u in ("kilometer", "kilometers", "km"):
-        return float(distance) * 1000.0
-    if u in ("mile", "miles", "mi"):
-        return float(distance) * 1609.344
-    if u in ("meter", "meters", "m"):
-        return float(distance)
-    if u in ("yard", "yards", "yd"):
-        return float(distance) * 0.9144
-    return None
-
-
-def _extract_activity(detail: dict) -> dict:
-    if "activity" in detail and isinstance(detail["activity"], dict):
-        return detail["activity"]
-    if "activities" in detail and isinstance(detail["activities"], list) and detail["activities"]:
-        if isinstance(detail["activities"][0], dict):
-            return detail["activities"][0]
-    return detail
-
-
-def _activity_to_strava_payload(detail: dict) -> dict | None:
-    activity = _extract_activity(detail)
-    name = (
-        activity.get("activityName")
-        or activity.get("name")
-        or "Fitbit Activity"
+def _resolve_fitbit_credentials(args: argparse.Namespace) -> tuple[str, str, str]:
+    client_id = _require_value(
+        args.client_id or os.getenv("FITBIT_CLIENT_ID", ""),
+        "Enter your Fitbit Client ID: ",
+        "Fitbit Client ID is required.",
+        args.non_interactive,
     )
-    start_time = activity.get("startTime") or activity.get("startDate")
-    if not start_time:
-        print("  Warning: missing start time; skipping activity.")
-        return None
-
-    duration = activity.get("duration")
-    if duration is None:
-        print("  Warning: missing duration; skipping activity.")
-        return None
-    duration_sec = int(round(float(duration) / 1000.0)) if float(duration) > 10000 else int(round(float(duration)))
-    if duration_sec <= 0:
-        print("  Warning: invalid duration; skipping activity.")
-        return None
-
-    distance = activity.get("distance")
-    distance_unit = activity.get("distanceUnit") or activity.get("distanceUnitLabel")
-    distance_m = _distance_to_meters(distance, distance_unit)
-
-    payload = {
-        "name": name,
-        "type": _fitbit_to_strava_type(name),
-        "start_date_local": start_time,
-        "elapsed_time": duration_sec,
-        "external_id": str(activity.get("logId") or activity.get("activityLogId") or activity.get("id") or ""),
-        "description": "Imported from Fitbit",
-    }
-    if distance_m is not None:
-        payload["distance"] = distance_m
-    calories = activity.get("calories")
-    if calories is not None:
-        payload["calories"] = int(calories)
-    return payload
-
-def main():
-    parser = build_parser()
-    args = parser.parse_args()
-
-    # --configure mode: wizard only
-    if args.configure:
-        run_configure()
-        return
-
-    # Resolve credentials
-    client_id     = args.client_id or os.getenv("FITBIT_CLIENT_ID", "").strip()
     client_secret = os.getenv("FITBIT_CLIENT_SECRET", "").strip()
-    redirect_uri  = os.getenv("FITBIT_REDIRECT_URI", "https://192.168.86.39:8080").strip()
+    redirect_uri = os.getenv("FITBIT_REDIRECT_URI", "https://192.168.86.39:8080").strip()
+    return client_id, client_secret, redirect_uri
 
-    if not client_id:
-        client_id = input("Enter your Fitbit Client ID: ").strip()
-    if not client_id:
-        print("Error: Fitbit Client ID is required.")
-        sys.exit(1)
 
-    # --auth mode: authenticate and exit
-    if args.auth:
+def _resolve_strava_credentials(args: argparse.Namespace) -> tuple[str, str, str]:
+    client_id = _require_value(
+        args.strava_client_id or os.getenv("STRAVA_CLIENT_ID", ""),
+        "Enter your Strava Client ID: ",
+        "Strava Client ID is required.",
+        args.non_interactive,
+    )
+    client_secret = _require_value(
+        args.strava_client_secret or os.getenv("STRAVA_CLIENT_SECRET", ""),
+        "Enter your Strava Client Secret: ",
+        "Strava Client Secret is required.",
+        args.non_interactive,
+    )
+    redirect_uri = os.getenv("STRAVA_REDIRECT_URI", "http://localhost:8080").strip()
+    return client_id, client_secret, redirect_uri
+
+
+def _print_table(title: str, data: dict[str, dict], key_header: str) -> None:
+    print(f"\n{'=' * 72}")
+    print(f"  {title}")
+    print(f"{'=' * 72}")
+    print(f"  {key_header:<14}  {'Light':>6}  {'Moderate':>8}  {'Vigorous':>8}  {'Max Eff':>7}  {'Fit-Mins':>8}")
+    print("  " + "-" * 68)
+    for key in sorted(data.keys()):
+        stats = data[key]
+        print(
+            f"  {key:<14}  "
+            f"{stats['light']:>6}  "
+            f"{stats['moderate']:>8}  "
+            f"{stats['vigorous']:>8}  "
+            f"{stats['max_effort']:>7}  "
+            f"{stats['fit_mins']:>8}"
+        )
+
+
+def _run_auth_mode(args: argparse.Namespace) -> None:
+    if args.provider == "fitbit":
         from auth import authorize
+
+        client_id, client_secret, redirect_uri = _resolve_fitbit_credentials(args)
         authorize(client_id, client_secret, redirect_uri)
         return
 
-    # --strava-auth mode: authenticate and exit
-    if args.strava_auth:
-        strava_client_id = args.strava_client_id or os.getenv("STRAVA_CLIENT_ID", "").strip()
-        strava_client_secret = args.strava_client_secret or os.getenv("STRAVA_CLIENT_SECRET", "").strip()
-        strava_redirect_uri = os.getenv("STRAVA_REDIRECT_URI", "http://localhost:8080").strip()
-        if not strava_client_id:
-            strava_client_id = input("Enter your Strava Client ID: ").strip()
-        if not strava_client_secret:
-            strava_client_secret = input("Enter your Strava Client Secret: ").strip()
-        if not strava_client_id or not strava_client_secret:
-            print("Error: Strava Client ID and Secret are required.")
-            sys.exit(1)
-        StravaClient(strava_client_id, strava_client_secret, strava_redirect_uri)._token()
-        return
+    strava_client_id, strava_client_secret, strava_redirect_uri = _resolve_strava_credentials(args)
+    StravaClient(strava_client_id, strava_client_secret, strava_redirect_uri)._token()
 
-    # Load zone config
-    # Date range
-    yesterday = date.today() - timedelta(days=1)
-    if args.start:
-        start = datetime.strptime(args.start, "%Y-%m-%d").date()
-        end = datetime.strptime(args.end, "%Y-%m-%d").date() if args.end else yesterday
-    else:
-        end = yesterday
-        start = end - timedelta(days=args.days - 1)
 
-    if start > end:
-        print("Error: start date must be before end date.")
-        sys.exit(1)
+def _run_analyze_mode(args: argparse.Namespace, start: date, end: date) -> None:
+    client_id, client_secret, redirect_uri = _resolve_fitbit_credentials(args)
 
-    if args.sync_strava:
-        strava_client_id = args.strava_client_id or os.getenv("STRAVA_CLIENT_ID", "").strip()
-        strava_client_secret = args.strava_client_secret or os.getenv("STRAVA_CLIENT_SECRET", "").strip()
-        strava_redirect_uri = os.getenv("STRAVA_REDIRECT_URI", "http://localhost:8080").strip()
-
-        if not strava_client_id:
-            strava_client_id = input("Enter your Strava Client ID: ").strip()
-        if not strava_client_secret:
-            strava_client_secret = input("Enter your Strava Client Secret: ").strip()
-        if not strava_client_id or not strava_client_secret:
-            print("Error: Strava Client ID and Secret are required.")
-            sys.exit(1)
-
-        print("\nFitbit -> Strava sync")
-        print(f"  Date range  : {start}  ->  {end}  ({(end - start).days + 1} days)")
-        print()
-
-        client = FitbitClient(client_id, client_secret, redirect_uri)
-        strava = StravaClient(strava_client_id, strava_client_secret, strava_redirect_uri)
-
-        activities = client.get_activities_range(start, end, use_cache=not args.no_cache)
-        if args.verbose:
-            print(f"Fetched {len(activities)} Fitbit activities.")
-
-        include_types = _normalize_type_list(args.types)
-        exclude_types = _normalize_type_list(args.exclude_types)
-
-        synced = _load_synced()
-        uploaded = 0
-
-        for act in activities:
-            name = act.get("activityName") or act.get("name") or ""
-            name_key = name.lower()
-            if include_types and name_key not in include_types:
-                continue
-            if exclude_types and name_key in exclude_types:
-                continue
-
-            log_id = act.get("logId") or act.get("activityLogId") or act.get("id")
-            if not log_id:
-                print("  Warning: missing logId; skipping activity.")
-                continue
-
-            if not args.force and str(log_id) in synced:
-                if args.verbose:
-                    print(f"  Skipping already synced: {name} ({log_id})")
-                continue
-
-            detail = client.get_activity_detail(int(log_id))
-            payload = _activity_to_strava_payload(detail)
-            if payload is None:
-                continue
-
-            if args.dry_run:
-                print(f"  Dry run: {payload['name']} ({payload['type']}) at {payload['start_date_local']}")
-            else:
-                resp = strava.create_activity(payload)
-                synced[str(log_id)] = {
-                    "strava_id": resp.get("id"),
-                    "name": payload["name"],
-                    "start_date_local": payload["start_date_local"],
-                }
-                _save_synced(synced)
-                print(f"  Uploaded: {payload['name']} -> Strava ID {resp.get('id')}")
-                uploaded += 1
-
-            if args.limit and uploaded >= args.limit:
-                break
-
-        if args.dry_run:
-            print("Dry run completed.")
-        else:
-            print(f"Sync completed. Uploaded {uploaded} activities.")
-        return
-
-    # Load zone config (only for HR analysis flow)
     if not CONFIG_FILE.exists():
-        print(f"Note: {CONFIG_FILE} not found -- using defaults. Run --configure to set your zones.")
+        print(f"Note: {CONFIG_FILE} not found - using defaults. Run with --mode configure to set your zones.")
     cfg = load_config()
 
-    print(f"\nFitbit Heart Rate Zone Analyzer  (ACSM intensity framework)")
-    print(f"  Date range  : {start}  →  {end}  ({(end - start).days + 1} days)")
+    print("\nFitbit Heart Rate Zone Analyzer (ACSM intensity framework)")
+    print(f"  Date range  : {start} -> {end}  ({(end - start).days + 1} days)")
     print(f"  Light       : < {cfg.moderate_min} bpm              (< 65%)")
-    print(f"  Moderate    : {cfg.moderate_min} – {cfg.vigorous_min - 1} bpm  (65–75%)")
-    print(f"  Vigorous    : {cfg.vigorous_min} – {cfg.max_effort_min - 1} bpm  (76–96%)")
+    print(f"  Moderate    : {cfg.moderate_min} - {cfg.vigorous_min - 1} bpm  (65-75%)")
+    print(f"  Vigorous    : {cfg.vigorous_min} - {cfg.max_effort_min - 1} bpm  (76-96%)")
     print(f"  Max Effort  : {cfg.max_effort_min}+ bpm              (> 96%)")
-    print(f"  Fit-Mins    : Moderate + 2×(Vigorous + Max Effort)  [goal: 150/week]")
+    print("  Fit-Mins    : Moderate + 2*(Vigorous + Max Effort)  [goal: 150/week]")
     print()
 
-    # Fetch (uses .cache/ by default — already-downloaded days are not re-fetched)
     client = FitbitClient(client_id, client_secret, redirect_uri)
-    print("Fetching data…")
+    print("Fetching data...")
     hr_data = client.get_hr_range(start, end, use_cache=not args.no_cache)
 
-    # Analyse
     daily = daily_summary(hr_data, cfg)
+    views = parse_views(args.view)
 
-    views = [v.strip().lower() for v in args.view.split(",")]
-
-    # ── Daily ──────────────────────────────────────────────────────────
     if "daily" in views:
         _print_table("DAILY SUMMARY", daily, "Date")
         if not args.no_plot:
             plot_daily(daily, cfg)
 
-    # ── Weekly ─────────────────────────────────────────────────────────
     if "weekly" in views:
         weekly = weekly_summary(daily)
         _print_table("WEEKLY SUMMARY", weekly, "ISO Week")
         if not args.no_plot:
             plot_weekly(weekly, cfg)
 
-    # ── Monthly ────────────────────────────────────────────────────────
     if "monthly" in views:
         monthly = monthly_summary(daily)
         _print_table("MONTHLY SUMMARY", monthly, "Month")
         if not args.no_plot:
             plot_monthly(monthly, cfg)
+
+
+def _run_sync_mode(args: argparse.Namespace, start: date, end: date) -> None:
+    fitbit_client_id, fitbit_client_secret, fitbit_redirect_uri = _resolve_fitbit_credentials(args)
+    strava_client_id, strava_client_secret, strava_redirect_uri = _resolve_strava_credentials(args)
+
+    print("\nFitbit -> Strava sync")
+    print(f"  Date range  : {start} -> {end}  ({(end - start).days + 1} days)")
+    print()
+
+    fitbit_client = FitbitClient(fitbit_client_id, fitbit_client_secret, fitbit_redirect_uri)
+    strava_client = StravaClient(strava_client_id, strava_client_secret, strava_redirect_uri)
+
+    activities = fitbit_client.get_activities_range(start, end, use_cache=not args.no_cache)
+    if args.verbose:
+        print(f"Fetched {len(activities)} Fitbit activities.")
+
+    include_types = normalize_type_list(args.types)
+    exclude_types = normalize_type_list(args.exclude_types)
+
+    synced = _load_synced()
+    uploaded = 0
+
+    for activity in activities:
+        name = activity.get("activityName") or activity.get("name") or ""
+        name_key = name.lower()
+
+        if include_types and name_key not in include_types:
+            continue
+        if exclude_types and name_key in exclude_types:
+            continue
+
+        log_id = activity.get("logId") or activity.get("activityLogId") or activity.get("id")
+        if not log_id:
+            print("  Warning: missing logId; skipping activity.")
+            continue
+
+        if not args.force and str(log_id) in synced:
+            if args.verbose:
+                print(f"  Skipping already synced: {name} ({log_id})")
+            continue
+
+        detail = fitbit_client.get_activity_detail(int(log_id))
+        payload = activity_to_strava_payload(detail)
+        if payload is None:
+            continue
+
+        if args.dry_run:
+            print(f"  Dry run: {payload['name']} ({payload['type']}) at {payload['start_date_local']}")
+        else:
+            response = strava_client.create_activity(payload)
+            synced[str(log_id)] = {
+                "strava_id": response.get("id"),
+                "name": payload["name"],
+                "start_date_local": payload["start_date_local"],
+            }
+            _save_synced(synced)
+            print(f"  Uploaded: {payload['name']} -> Strava ID {response.get('id')}")
+            uploaded += 1
+
+        if args.limit and uploaded >= args.limit:
+            break
+
+    if args.dry_run:
+        print("Dry run completed.")
+    else:
+        print(f"Sync completed. Uploaded {uploaded} activities.")
+
+
+def main() -> None:
+    parser = build_parser()
+    provided_flags = _collect_provided_flags(sys.argv[1:])
+    args = parser.parse_args()
+    _validate_mode_contract(args, parser, provided_flags)
+
+    try:
+        if args.mode == "configure":
+            run_configure()
+            return
+
+        if args.mode == "auth":
+            _run_auth_mode(args)
+            return
+
+        start, end = _resolve_date_range(args)
+
+        if args.mode == "analyze":
+            _run_analyze_mode(args, start, end)
+            return
+
+        _run_sync_mode(args, start, end)
+
+    except ValueError as exc:
+        print(f"Error: {exc}")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

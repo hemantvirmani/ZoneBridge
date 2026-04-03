@@ -1,7 +1,7 @@
 """
 Heart-rate zone classification and metrics (ACSM intensity framework).
 
-Zone boundaries are loaded from fitbit_config.json (created via --configure).
+Zone boundaries are loaded from fitbit_config.json (created via --mode configure).
 Four zones based on HR-Max percentages:
 
   Light      –  hr < moderate_min       (< 65 % HR-Max)
