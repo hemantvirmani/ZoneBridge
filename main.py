@@ -511,7 +511,7 @@ def _run_sync_mode(args: argparse.Namespace, start: date, end: date) -> None:
             continue
 
         detail = fitbit_client.get_activity_detail(int(log_id))
-        payload = activity_to_strava_payload(detail)
+        payload = activity_to_strava_payload(detail, fallback_activity=activity)
         if payload is None:
             continue
 

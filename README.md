@@ -28,6 +28,19 @@ STRAVA_CLIENT_SECRET=your_strava_client_secret
 STRAVA_REDIRECT_URI=http://localhost:8080
 ```
 
+## How To Get Strava Client ID And Secret
+
+1. Open `https://www.strava.com/settings/api`
+2. Create an app (or open your existing app)
+3. Copy the values shown as **Client ID** and **Client Secret**
+4. Add them to your `.env` as:
+   - `STRAVA_CLIENT_ID=...`
+   - `STRAVA_CLIENT_SECRET=...`
+
+If Strava asks for callback details, use:
+- Authorization callback domain: `localhost`
+- Redirect URI: `http://localhost:8080`
+
 ## Command Model
 
 The CLI is mode-based:
