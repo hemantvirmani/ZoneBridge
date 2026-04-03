@@ -14,6 +14,7 @@ from auth import get_valid_token, authorize
 
 API_BASE = "https://api.fitbit.com"
 CACHE_DIR = Path(".cache")
+ACTIVITY_CACHE_PREFIX = "activities_"
 
 
 def _ensure_cache():
@@ -34,6 +35,22 @@ def _load_cache(date_str: str):
 def _save_cache(date_str: str, data):
     _ensure_cache()
     _cache_path(date_str).write_text(json.dumps(data))
+
+
+def _activity_cache_path(key: str) -> Path:
+    return CACHE_DIR / f"{ACTIVITY_CACHE_PREFIX}{key}.json"
+
+
+def _load_activity_cache(key: str):
+    p = _activity_cache_path(key)
+    if p.exists():
+        return json.loads(p.read_text())
+    return None
+
+
+def _save_activity_cache(key: str, data):
+    _ensure_cache()
+    _activity_cache_path(key).write_text(json.dumps(data))
 
 
 class FitbitClient:
@@ -136,3 +153,86 @@ class FitbitClient:
             current += timedelta(days=1)
 
         return result
+
+    # ------------------------------------------------------------------
+    # Activity logs
+    # ------------------------------------------------------------------
+
+    def get_activity_detail(self, activity_log_id: int) -> dict:
+        """
+        Fetch full details for a single activity log.
+        """
+        url = f"{API_BASE}/1/user/-/activities/{activity_log_id}.json"
+        resp = requests.get(url, headers=self._headers(), timeout=30)
+        if resp.status_code == 429:
+            reset_secs = int(resp.headers.get("Fitbit-Rate-Limit-Reset", 60))
+            print(f"  Rate limit hit -- waiting {reset_secs}s...")
+            time.sleep(reset_secs + 1)
+            resp = requests.get(url, headers=self._headers(), timeout=30)
+        resp.raise_for_status()
+        return resp.json()
+
+    def get_activities_range(
+        self,
+        start: date,
+        end: date,
+        use_cache: bool = True,
+        limit: int = 100,
+    ) -> list[dict]:
+        """
+        Fetch activity logs in [start, end] using the Fitbit activity list API.
+        Returns a list of activity dicts.
+        """
+        cache_key = f"{start.isoformat()}_{end.isoformat()}"
+        if use_cache:
+            cached = _load_activity_cache(cache_key)
+            if cached is not None:
+                return cached
+
+        activities: list[dict] = []
+        offset = 0
+        total = None
+        start_date = start.isoformat()
+        end_date = end.isoformat()
+
+        while True:
+            url = f"{API_BASE}/1/user/-/activities/list.json"
+            params = {
+                "afterDate": start_date,
+                "sort": "asc",
+                "offset": offset,
+                "limit": limit,
+            }
+            resp = requests.get(url, headers=self._headers(), params=params, timeout=30)
+            if resp.status_code == 429:
+                reset_secs = int(resp.headers.get("Fitbit-Rate-Limit-Reset", 60))
+                print(f"  Rate limit hit -- waiting {reset_secs}s...")
+                time.sleep(reset_secs + 1)
+                resp = requests.get(url, headers=self._headers(), params=params, timeout=30)
+            resp.raise_for_status()
+            body = resp.json()
+            batch = body.get("activities", [])
+            if total is None:
+                total = body.get("pagination", {}).get("total", None)
+
+            # Filter to end date (inclusive)
+            for act in batch:
+                start_time = act.get("startTime", "")
+                if start_time[:10] > end_date:
+                    if use_cache:
+                        _save_activity_cache(cache_key, activities)
+                    return activities
+                if start_time[:10] >= start_date:
+                    activities.append(act)
+
+            if not batch:
+                break
+
+            offset += len(batch)
+            if total is not None and offset >= total:
+                break
+
+        if use_cache:
+            _save_activity_cache(cache_key, activities)
+
+        return activities
