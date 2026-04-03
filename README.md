@@ -57,6 +57,20 @@ Example:
 python main.py --mode analyze --days 7
 ```
 
+## Run From GitHub With `uvx` (No Install)
+
+You can run FitbitApp directly from this repo without installing it permanently:
+
+```bash
+uvx --from git+https://github.com/hemantvirmani/FitbitApp fitbitapp --help
+```
+
+For reproducible runs, pin to a tag:
+
+```bash
+uvx --from git+https://github.com/hemantvirmani/FitbitApp@v0.1.0 fitbitapp --mode analyze --days 7
+```
+
 ## Modes
 
 | Mode | Purpose | Required extra flags |

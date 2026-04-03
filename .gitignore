@@ -6,3 +6,6 @@ fitbit_daily.png
 fitbit_weekly.png
 fitbit_monthly.png
 .env
+build/
+dist/
+*.egg-info/

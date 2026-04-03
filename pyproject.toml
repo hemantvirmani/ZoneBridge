@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fitbitapp"
+version = "0.1.0"
+description = "CLI for Fitbit HR analysis and Fitbit to Strava sync."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "requests>=2.31.0",
+  "matplotlib>=3.7.0",
+  "numpy>=1.24.0",
+  "python-dotenv>=1.0.0",
+  "cryptography>=41.0.0",
+]
+
+[project.scripts]
+fitbitapp = "main:main"
+
+[tool.setuptools]
+py-modules = [
+  "main",
+  "analysis",
+  "auth",
+  "fitbit_client",
+  "plots",
+  "strava_client",
+  "sync_adapter",
+]
