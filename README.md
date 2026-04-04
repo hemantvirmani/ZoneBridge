@@ -562,6 +562,35 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
    - Authorization callback domain: `localhost`
    - Redirect URI: `http://localhost:8080`
 
+### How do I update heart-rate zone thresholds?
+
+You have two options:
+
+1. Recommended: run the interactive configurator
+
+```bash
+zonebridge --mode configure
+```
+
+This rewrites `fitbit_config.json` with your selected thresholds.
+
+2. Manual edit: update `fitbit_config.json` directly
+
+Example:
+
+```json
+{
+  "moderate_min": 117,
+  "vigorous_min": 137,
+  "max_effort_min": 173
+}
+```
+
+Rules:
+- values are lower bounds in bpm
+- keep ascending order: `moderate_min < vigorous_min < max_effort_min`
+- changes apply to the next analyze/sync run automatically
+
 ### I get `zonebridge: command not found`
 
 Use one of these:
