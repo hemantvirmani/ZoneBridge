@@ -2,7 +2,7 @@
 
 zonebridge is a command-line tool to:
 - analyze Fitbit intraday heart-rate data using American College of Sports Medicine (ACSM) intensity zones, aligned with CDC and AHA physical activity recommendations
-- compute Fit-Mins* summaries (daily, weekly, monthly)
+- compute Fit-Mins and total exercise-minute summaries (daily, weekly, monthly)
 - help you easily track whether you are hitting the CDC-supported goal of 150-300 weekly exercise minutes
 - let you customize zone thresholds to match your personal needs
 - optionally sync Fitbit activities to Strava
@@ -15,6 +15,9 @@ A Fit-Min is a weighted exercise minute used to reflect intensity:
 - 1 minute in Vigorous & Max Effort zone = 2 Fit-Mins
 - Light zone is for our regular activity and hence, do not add to Fit-Mins
 
+Assumption used by this app:
+- the app assumes you are exercising when your heart rate is in Moderate, Vigorous, or Max Effort zones, and counts those minutes as exercise time
+
 Formula used by this app:
 
 `Fit-Mins = Moderate + 2 x (Vigorous + Max Effort)`
@@ -24,6 +27,11 @@ Example:
 - Fit-Mins = `20 + 2 x (10 + 5) = 50`
 
 > **Weekly Goal: Target 150-300 Fit-Mins per week.**
+
+Report outputs:
+- tables show `Moderate`, `Vigorous`, `Max Eff`, `Fit-Mins`, and `Exercise`
+- `Light` minutes are intentionally excluded from report tables and plots
+- `Exercise` is total Fitbit activity duration (minutes) for the period
 
 ## Guideline References
 
@@ -380,7 +388,7 @@ Sync options:
 
 Fitbit data is downloaded in these modes:
 
-- `--mode analyze`: downloads intraday HR data via `FitbitClient.get_hr_range(...)`
+- `--mode analyze`: downloads intraday HR data via `FitbitClient.get_hr_range(...)` and activity logs via `FitbitClient.get_activities_range(...)` for total exercise minutes
 - `--mode sync --provider strava`: downloads Fitbit activity logs/details via
   `FitbitClient.get_activities_range(...)` and `FitbitClient.get_activity_detail(...)`
 
@@ -503,8 +511,8 @@ zonebridge/
   auth.py          # Fitbit OAuth helpers
   strava_client.py # Strava OAuth + upload client
   sync_adapter.py  # Fitbit->Strava mapping and payload conversion
-  analysis.py      # Zone/Fit-Mins calculations
-  plots.py         # chart generation
+  analysis.py      # Zone/Fit-Mins + exercise-minute aggregations
+  plots.py         # chart generation (exercise zones + Fit-Mins/Exercise Mins)
   README.md
 ```
 

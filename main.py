@@ -17,6 +17,7 @@ from dotenv import load_dotenv
 from analysis import (
     CONFIG_FILE,
     ZoneConfig,
+    activity_minutes_by_date,
     daily_summary,
     load_config,
     monthly_summary,
@@ -403,17 +404,17 @@ def _print_table(title: str, data: dict[str, dict], key_header: str) -> None:
     print(f"\n{'=' * 72}")
     print(f"  {title}")
     print(f"{'=' * 72}")
-    print(f"  {key_header:<14}  {'Light':>6}  {'Moderate':>8}  {'Vigorous':>8}  {'Max Eff':>7}  {'Fit-Mins':>8}")
+    print(f"  {key_header:<14}  {'Moderate':>8}  {'Vigorous':>8}  {'Max Eff':>7}  {'Fit-Mins':>8}  {'Exercise':>8}")
     print("  " + "-" * 68)
     for key in sorted(data.keys()):
         stats = data[key]
         print(
             f"  {key:<14}  "
-            f"{stats['light']:>6}  "
             f"{stats['moderate']:>8}  "
             f"{stats['vigorous']:>8}  "
             f"{stats['max_effort']:>7}  "
-            f"{stats['fit_mins']:>8}"
+            f"{stats['fit_mins']:>8}  "
+            f"{stats.get('exercise_mins', 0.0):>8.1f}"
         )
 
 
@@ -448,8 +449,17 @@ def _run_analyze_mode(args: argparse.Namespace, start: date, end: date) -> None:
     client = FitbitClient(client_id, client_secret, redirect_uri)
     print("Fetching data...")
     hr_data = client.get_hr_range(start, end, use_cache=not args.no_cache)
+    activities: list[dict] = []
+    exercise_by_date: dict[str, float] = {}
+    try:
+        activities = client.get_activities_range(start, end, use_cache=not args.no_cache)
+        exercise_by_date = activity_minutes_by_date(activities)
+        if args.verbose:
+            print(f"Fetched {len(activities)} Fitbit activities for exercise totals.")
+    except Exception as exc:  # noqa: BLE001
+        print(f"Warning: could not fetch Fitbit activity logs for exercise totals ({exc}). Continuing with HR-only metrics.")
 
-    daily = daily_summary(hr_data, cfg)
+    daily = daily_summary(hr_data, cfg, exercise_by_date=exercise_by_date)
     views = parse_views(args.view)
 
     if "daily" in views:

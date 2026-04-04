@@ -4,17 +4,18 @@ Heart-rate zone classification and metrics (ACSM intensity framework).
 Zone boundaries are loaded from fitbit_config.json (created via --mode configure).
 Four zones based on HR-Max percentages:
 
-  Light      –  hr < moderate_min       (< 65 % HR-Max)
-  Moderate   –  moderate_min <= hr < vigorous_min  (65–75 %)
-  Vigorous   –  vigorous_min <= hr < max_effort_min  (76–96 %)
-  Max Effort –  hr >= max_effort_min    (> 96 % HR-Max)
+  Light      - hr < moderate_min                 (< 65% HR-Max)
+  Moderate   - moderate_min <= hr < vigorous_min (65-75%)
+  Vigorous   - vigorous_min <= hr < max_effort_min (76-96%)
+  Max Effort - hr >= max_effort_min              (> 96% HR-Max)
 
-Fit-Mins = Moderate_mins + 2 × (Vigorous_mins + Max_Effort_mins)
+Fit-Mins = Moderate_mins + 2 x (Vigorous_mins + Max_Effort_mins)
 Weekly goal: 150 Fit-Mins
 """
 from __future__ import annotations
 
 import json
+from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -40,8 +41,8 @@ class ZoneConfig:
     def labels(self) -> dict[str, str]:
         return {
             "light":      f"Light (<{self.moderate_min} bpm, <65%)",
-            "moderate":   f"Moderate ({self.moderate_min}–{self.vigorous_min - 1} bpm, 65–75%)",
-            "vigorous":   f"Vigorous ({self.vigorous_min}–{self.max_effort_min - 1} bpm, 76–96%)",
+            "moderate":   f"Moderate ({self.moderate_min}-{self.vigorous_min - 1} bpm, 65-75%)",
+            "vigorous":   f"Vigorous ({self.vigorous_min}-{self.max_effort_min - 1} bpm, 76-96%)",
             "max_effort": f"Max Effort ({self.max_effort_min}+ bpm, >96%)",
         }
 
@@ -114,8 +115,48 @@ def zone_minutes(dataset: Sequence[dict], cfg: ZoneConfig = DEFAULT_ZONES) -> di
 
 
 def fit_mins(zm: dict[str, int]) -> int:
-    """Fit-Mins = Moderate + 2 × (Vigorous + Max_Effort)."""
+    """Fit-Mins = Moderate + 2 x (Vigorous + Max_Effort)."""
     return zm["moderate"] + 2 * (zm["vigorous"] + zm["max_effort"])
+
+
+def _duration_to_minutes(duration: object) -> float | None:
+    """Convert Fitbit activity duration to minutes."""
+    if duration is None:
+        return None
+    try:
+        value = float(duration)
+    except (TypeError, ValueError):
+        return None
+    seconds = value / 1000.0 if value > 10000 else value
+    if seconds <= 0:
+        return None
+    return seconds / 60.0
+
+
+def activity_minutes_by_date(activities: Sequence[dict]) -> dict[str, float]:
+    """Aggregate exercise duration minutes from Fitbit activity logs by date."""
+    totals: dict[str, float] = defaultdict(float)
+    for activity in activities:
+        start_time = (
+            activity.get("startTime")
+            or activity.get("originalStartTime")
+            or activity.get("startDate")
+        )
+        if not isinstance(start_time, str) or len(start_time) < 10:
+            continue
+        day = start_time[:10]
+
+        duration = (
+            activity.get("duration")
+            or activity.get("activeDuration")
+            or activity.get("originalDuration")
+        )
+        minutes = _duration_to_minutes(duration)
+        if minutes is None:
+            continue
+        totals[day] += minutes
+
+    return {day: round(total, 1) for day, total in totals.items()}
 
 
 # ---------------------------------------------------------------------------
@@ -125,15 +166,22 @@ def fit_mins(zm: dict[str, int]) -> int:
 def daily_summary(
     hr_by_date: dict[str, list[dict]],
     cfg: ZoneConfig = DEFAULT_ZONES,
+    exercise_by_date: dict[str, float] | None = None,
 ) -> dict[str, dict]:
     """
     Build per-day stats from raw intraday data.
-    Returns {date_str: {'light': m, 'moderate': m, 'vigorous': m, 'max_effort': m, 'fit_mins': m}}
+    Returns {date_str: {'light': m, 'moderate': m, 'vigorous': m, 'max_effort': m,
+                        'fit_mins': m, 'exercise_mins': x.x}}
     """
     result: dict[str, dict] = {}
+    exercise_by_date = exercise_by_date or {}
     for date_str, dataset in hr_by_date.items():
         zm = zone_minutes(dataset, cfg)
-        result[date_str] = {**zm, "fit_mins": fit_mins(zm)}
+        result[date_str] = {
+            **zm,
+            "fit_mins": fit_mins(zm),
+            "exercise_mins": round(exercise_by_date.get(date_str, 0.0), 1),
+        }
     return result
 
 
@@ -145,9 +193,13 @@ def weekly_summary(daily: dict[str, dict]) -> dict[str, dict]:
         iso = dt.isocalendar()
         key = f"{iso[0]}-W{iso[1]:02d}"
         if key not in weekly:
-            weekly[key] = {k: 0 for k in (*ZONE_KEYS, "fit_mins")}
+            weekly[key] = {k: 0 for k in (*ZONE_KEYS, "fit_mins", "exercise_mins")}
         for k in (*ZONE_KEYS, "fit_mins"):
             weekly[key][k] += stats[k]
+        weekly[key]["exercise_mins"] += stats.get("exercise_mins", 0.0)
+
+    for key in weekly:
+        weekly[key]["exercise_mins"] = round(weekly[key]["exercise_mins"], 1)
     return weekly
 
 
@@ -157,7 +209,11 @@ def monthly_summary(daily: dict[str, dict]) -> dict[str, dict]:
     for date_str, stats in daily.items():
         key = date_str[:7]
         if key not in monthly:
-            monthly[key] = {k: 0 for k in (*ZONE_KEYS, "fit_mins")}
+            monthly[key] = {k: 0 for k in (*ZONE_KEYS, "fit_mins", "exercise_mins")}
         for k in (*ZONE_KEYS, "fit_mins"):
             monthly[key][k] += stats[k]
+        monthly[key]["exercise_mins"] += stats.get("exercise_mins", 0.0)
+
+    for key in monthly:
+        monthly[key]["exercise_mins"] = round(monthly[key]["exercise_mins"], 1)
     return monthly
