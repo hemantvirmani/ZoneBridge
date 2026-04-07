@@ -9,7 +9,7 @@ import argparse
 import json
 import os
 import sys
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -33,6 +33,7 @@ load_dotenv()
 
 SYNC_LOG = Path(".cache") / "strava_synced.json"
 ALLOWED_VIEWS = {"daily", "weekly", "monthly"}
+STRAVA_DUPLICATE_CHECK_TYPES = {"run", "walk"}
 
 
 def run_configure() -> ZoneConfig:
@@ -400,6 +401,72 @@ def _resolve_strava_credentials(args: argparse.Namespace) -> tuple[str, str, str
     return client_id, client_secret, redirect_uri
 
 
+def _parse_iso_datetime(value: object) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _is_probable_strava_duplicate(payload: dict, existing: dict) -> bool:
+    payload_type = str(payload.get("type", "")).strip().lower()
+    existing_type = str(existing.get("type", "")).strip().lower()
+    if payload_type != existing_type:
+        return False
+
+    payload_start_raw = payload.get("start_date_local")
+    existing_start_raw = existing.get("start_date_local") or existing.get("start_date")
+    payload_start = _parse_iso_datetime(payload_start_raw)
+    existing_start = _parse_iso_datetime(existing_start_raw)
+
+    if payload_start and existing_start:
+        time_close = abs((existing_start - payload_start).total_seconds()) <= 45 * 60
+    else:
+        payload_day = str(payload_start_raw)[:10]
+        existing_day = str(existing_start_raw)[:10]
+        time_close = bool(payload_day and payload_day == existing_day)
+
+    if not time_close:
+        return False
+
+    payload_elapsed = payload.get("elapsed_time")
+    existing_elapsed = existing.get("elapsed_time") or existing.get("moving_time")
+    duration_match = False
+    if isinstance(payload_elapsed, (int, float)) and isinstance(existing_elapsed, (int, float)):
+        p = float(payload_elapsed)
+        e = float(existing_elapsed)
+        if p > 0 and e > 0:
+            duration_match = abs(p - e) <= max(600.0, 0.30 * max(p, e))
+
+    payload_distance = payload.get("distance")
+    existing_distance = existing.get("distance")
+    distance_match = False
+    if isinstance(payload_distance, (int, float)) and isinstance(existing_distance, (int, float)):
+        p = float(payload_distance)
+        e = float(existing_distance)
+        if p > 0 and e > 0:
+            distance_match = abs(p - e) <= 0.25 * max(p, e)
+
+    if duration_match or distance_match:
+        return True
+
+    payload_name = str(payload.get("name", "")).strip().lower()
+    existing_name = str(existing.get("name", "")).strip().lower()
+    if payload_name and existing_name:
+        return payload_name == existing_name
+    return False
+
+
 def _print_table(title: str, data: dict[str, dict], key_header: str) -> None:
     print(f"\n{'=' * 72}")
     print(f"  {title}")
@@ -491,6 +558,26 @@ def _run_sync_mode(args: argparse.Namespace, start: date, end: date) -> None:
     fitbit_client = FitbitClient(fitbit_client_id, fitbit_client_secret, fitbit_redirect_uri)
     strava_client = StravaClient(strava_client_id, strava_client_secret, strava_redirect_uri)
 
+    strava_run_walk_activities: list[dict] = []
+    if not args.force:
+        try:
+            after_dt = datetime(start.year, start.month, start.day, tzinfo=timezone.utc) - timedelta(days=1)
+            before_dt = datetime(end.year, end.month, end.day, 23, 59, 59, tzinfo=timezone.utc) + timedelta(days=1)
+            recent = strava_client.list_activities(
+                after=int(after_dt.timestamp()),
+                before=int(before_dt.timestamp()),
+                per_page=200,
+                max_pages=10,
+            )
+            strava_run_walk_activities = [
+                item for item in recent
+                if str(item.get("type", "")).strip().lower() in STRAVA_DUPLICATE_CHECK_TYPES
+            ]
+            if args.verbose:
+                print(f"Loaded {len(strava_run_walk_activities)} Strava Run/Walk activities for duplicate checks.")
+        except Exception as exc:  # noqa: BLE001
+            print(f"Warning: could not load Strava activities for duplicate detection ({exc}).")
+
     activities = fitbit_client.get_activities_range(start, end, use_cache=not args.no_cache)
     if args.verbose:
         print(f"Fetched {len(activities)} Fitbit activities.")
@@ -525,6 +612,32 @@ def _run_sync_mode(args: argparse.Namespace, start: date, end: date) -> None:
         if payload is None:
             continue
 
+        payload_type = str(payload.get("type", "")).strip().lower()
+        if not args.force and payload_type in STRAVA_DUPLICATE_CHECK_TYPES:
+            probable_duplicate = next(
+                (existing for existing in strava_run_walk_activities if _is_probable_strava_duplicate(payload, existing)),
+                None,
+            )
+            if probable_duplicate is not None:
+                duplicate_id = probable_duplicate.get("id")
+                if args.dry_run:
+                    print(
+                        f"  Dry run: skipping likely duplicate already in Strava: "
+                        f"{payload['name']} ({payload['type']}) at {payload['start_date_local']} [id={duplicate_id}]"
+                    )
+                else:
+                    print(
+                        f"  Skipping likely duplicate already in Strava: "
+                        f"{payload['name']} ({payload['type']}) at {payload['start_date_local']} [id={duplicate_id}]"
+                    )
+                    synced[str(log_id)] = {
+                        "strava_id": duplicate_id,
+                        "name": payload["name"],
+                        "start_date_local": payload["start_date_local"],
+                    }
+                    _save_synced(synced)
+                continue
+
         if args.dry_run:
             print(f"  Dry run: {payload['name']} ({payload['type']}) at {payload['start_date_local']}")
         else:
@@ -537,6 +650,17 @@ def _run_sync_mode(args: argparse.Namespace, start: date, end: date) -> None:
             _save_synced(synced)
             print(f"  Uploaded: {payload['name']} -> Strava ID {response.get('id')}")
             uploaded += 1
+            if payload_type in STRAVA_DUPLICATE_CHECK_TYPES:
+                strava_run_walk_activities.append(
+                    {
+                        "id": response.get("id"),
+                        "type": payload.get("type"),
+                        "name": payload.get("name"),
+                        "start_date_local": payload.get("start_date_local"),
+                        "elapsed_time": payload.get("elapsed_time"),
+                        "distance": payload.get("distance"),
+                    }
+                )
 
         if args.limit and uploaded >= args.limit:
             break

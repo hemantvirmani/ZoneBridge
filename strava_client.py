@@ -171,3 +171,40 @@ class StravaClient:
         resp.raise_for_status()
         return resp.json()
 
+    def list_activities(
+        self,
+        after: int | None = None,
+        before: int | None = None,
+        per_page: int = 200,
+        max_pages: int = 10,
+    ) -> list[dict]:
+        """List athlete activities within an optional epoch-second time window."""
+        url = f"{API_BASE}/athlete/activities"
+        all_items: list[dict] = []
+        page = 1
+
+        while page <= max_pages:
+            params: dict[str, int] = {"per_page": per_page, "page": page}
+            if after is not None:
+                params["after"] = int(after)
+            if before is not None:
+                params["before"] = int(before)
+
+            resp = requests.get(url, headers=self._headers(), params=params, timeout=30)
+            if resp.status_code == 429:
+                reset_secs = int(resp.headers.get("RateLimit-Reset", 60))
+                print(f"  Rate limit hit -- waiting {reset_secs}s...")
+                time.sleep(reset_secs + 1)
+                resp = requests.get(url, headers=self._headers(), params=params, timeout=30)
+
+            resp.raise_for_status()
+            batch = resp.json()
+            if not isinstance(batch, list) or not batch:
+                break
+
+            all_items.extend(batch)
+            if len(batch) < per_page:
+                break
+            page += 1
+
+        return all_items
