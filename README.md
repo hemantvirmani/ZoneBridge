@@ -194,207 +194,7 @@ uvx --from git+https://github.com/hemantvirmani/ZoneBridge@v0.1.0 zonebridge --m
 | `analyze` | Download Fitbit HR data and generate summaries/charts | none |
 | `sync` | Download Fitbit activities and upload to Strava | `--provider strava` |
 
-## CLI Contract (Allowed And Forbidden By Mode)
-
-All CLI flags:
-- `--mode` (required): `configure|auth|analyze|sync`
-- `--provider`: `fitbit|strava`
-- `--client-id`
-- `--strava-client-id`
-- `--strava-client-secret`
-- `--days`
-- `--start`
-- `--end`
-- `--view` (default: `daily,weekly`)
-- `--no-cache`
-- `--no-plot`
-- `--types`
-- `--exclude-types`
-- `--dry-run`
-- `--limit` (default: `0`)
-- `--force`
-- `--verbose`
-- `--non-interactive`
-
-### `--mode configure`
-
-Allowed:
-- `--mode`
-- `--verbose`
-- `--non-interactive`
-
-Forbidden:
-- all other flags, including `--provider`
-
-Special rule:
-- `--non-interactive` is rejected for configure because configure is interactive.
-
-### `--mode auth`
-
-Allowed:
-- `--mode`
-- `--provider` (required)
-- `--client-id` (Fitbit only)
-- `--strava-client-id` (Strava only)
-- `--strava-client-secret` (Strava only)
-- `--verbose`
-- `--non-interactive`
-
-Forbidden combos:
-- `--provider fitbit` with `--strava-client-id` or `--strava-client-secret`
-- `--provider strava` with `--client-id`
-
-### `--mode analyze`
-
-Allowed:
-- `--mode`
-- `--client-id`
-- `--days`
-- `--start`
-- `--end`
-- `--view`
-- `--no-cache`
-- `--no-plot`
-- `--verbose`
-- `--non-interactive`
-
-Forbidden:
-- `--provider`
-- sync-only flags (`--types`, `--exclude-types`, `--dry-run`, `--limit`, `--force`, Strava credentials)
-
-### `--mode sync`
-
-Allowed:
-- `--mode`
-- `--provider` (must be `strava`)
-- `--client-id`
-- `--strava-client-id`
-- `--strava-client-secret`
-- `--days`
-- `--start`
-- `--end`
-- `--types`
-- `--exclude-types`
-- `--dry-run`
-- `--limit`
-- `--force`
-- `--no-cache`
-- `--verbose`
-- `--non-interactive`
-
-Forbidden:
-- `--view`
-- `--no-plot`
-- any flag not listed above
-
-### Validation Rules
-
-- unsupported flags for a selected mode are rejected
-- `--days` must be `>= 1`
-- `--limit` must be `>= 0`
-- `--start` requires `--end`
-- `--end` requires `--start`
-- do not mix `--days` with `--start/--end`
-- `--view` values must be a subset of: `daily`, `weekly`, `monthly`
-- `--types` and `--exclude-types` cannot overlap
-- if no date options are provided for analyze/sync, default window is the last 7 days
-
-## Options by Mode
-
-### Configure
-
-```bash
-zonebridge --mode configure
-```
-
-Allowed options:
-- `--verbose`
-
-### Auth
-
-Fitbit auth:
-
-```bash
-zonebridge --mode auth --provider fitbit [--client-id ID]
-```
-
-Strava auth:
-
-```bash
-zonebridge --mode auth --provider strava [--strava-client-id ID] [--strava-client-secret SECRET]
-```
-
-Allowed options:
-- `--provider`
-- `--client-id` (Fitbit only)
-- `--strava-client-id` (Strava only)
-- `--strava-client-secret` (Strava only)
-- `--verbose`
-- `--non-interactive`
-
-### Analyze
-
-```bash
-zonebridge --mode analyze [date options] [output options]
-```
-
-Date options (choose one style):
-- `--days N`
-- `--start YYYY-MM-DD --end YYYY-MM-DD`
-
-Output options:
-- `--view daily,weekly,monthly`
-- `--no-cache`
-- `--no-plot`
-- `--client-id`
-- `--verbose`
-- `--non-interactive`
-
-### Sync
-
-```bash
-zonebridge --mode sync --provider strava [date options] [sync options]
-```
-
-Date options (choose one style):
-- `--days N`
-- `--start YYYY-MM-DD --end YYYY-MM-DD`
-
-Sync options:
-- `--types LIST`
-- `--exclude-types LIST`
-- `--dry-run`
-- `--limit N`
-- `--force`
-- `--no-cache`
-- `--client-id`
-- `--strava-client-id`
-- `--strava-client-secret`
-- `--verbose`
-- `--non-interactive`
-
-## Validation Rules
-
-- `--days` must be `>= 1`
-- `--limit` must be `>= 0`
-- `--start` requires `--end`
-- `--end` requires `--start`
-- do not mix `--days` with `--start/--end`
-- analyze views must be from: `daily`, `weekly`, `monthly`
-- in sync mode, `--types` and `--exclude-types` cannot overlap
-- configure mode is interactive and cannot run with `--non-interactive`
-
-## Data Download Behavior
-
-Fitbit data is downloaded in these modes:
-
-- `--mode analyze`: downloads intraday HR data via `FitbitClient.get_hr_range(...)` and activity logs via `FitbitClient.get_activities_range(...)` for total exercise minutes
-- `--mode sync --provider strava`: downloads Fitbit activity logs/details via
-  `FitbitClient.get_activities_range(...)` and `FitbitClient.get_activity_detail(...)`
-
-Auth mode only performs OAuth token flows. It does not download analysis/activity data.
-
-## Many Examples
+## Examples
 
 ### Setup and Authentication
 
@@ -622,3 +422,17 @@ Current CLI contract requires date ranges to be either:
 - `--start YYYY-MM-DD --end YYYY-MM-DD`
 
 Using only one of `--start`/`--end` is rejected.
+
+### Give me quick list of commands that are run regularly?
+
+* Weekly HR zone analysis (last 30 days)
+
+```powershell
+python .\main.py --mode analyze --days 30 --view weekly
+```
+
+* Sync Fitbit activities to Strava (last 30 days)
+
+```powershell
+python .\main.py --mode sync --days 30 --provider strava
+```
